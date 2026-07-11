@@ -8,7 +8,8 @@ loop**, **mic → silence → whisper**, **wake word + hotkey front doors**, and
 
 - Windows 11
 - Python **3.13** via `py -3.13`
-- [Claude Code](https://claude.ai/code) CLI on `PATH` (for the real brain)
+- **Grok CLI** on `PATH` (default brain — SuperGrok / `~/.grok/bin/grok`)  
+  or [Claude Code](https://claude.ai/code) CLI if you switch with `--brain claude`
 - Optional: [Piper](https://github.com/rhasspy/piper) binary + ONNX voice for spoken replies
 - Optional voice path: GPU (RTX 4050 6 GB) + `pip install -e ".[voice]"`
 - Optional wake/hotkey: `pip install -e ".[wake]"` (+ free `PICOVOICE_ACCESS_KEY` for Porcupine)
@@ -48,10 +49,14 @@ Without Piper, replies still print in the terminal (`[jarvis speak] …` fallbac
 
 ## Run
 
-Interactive REPL (real Claude brain, typed input):
+Interactive REPL (**default brain: Grok CLI**, typed input):
 
 ```powershell
 py -3.13 -m jarvis
+# Force Grok / Claude / fake:
+py -3.13 -m jarvis --brain grok
+py -3.13 -m jarvis --brain claude
+py -3.13 -m jarvis --brain fake
 ```
 
 One-shot typed command:
@@ -59,7 +64,11 @@ One-shot typed command:
 ```powershell
 py -3.13 -m jarvis --once "open notepad"
 py -3.13 -m jarvis --no-speak --once "how much free disk space do I have?"
+# Pin model (Grok):
+py -3.13 -m jarvis --model grok-build --once "open notepad"
 ```
+
+Env switches: `JARVIS_BRAIN=grok|claude|fake`, `JARVIS_GROK_BIN`, `JARVIS_GROK_MODEL`.
 
 **One-shot voice** (mic → silence → whisper → brain → Piper, no wake word):
 

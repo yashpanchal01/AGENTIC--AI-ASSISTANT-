@@ -27,9 +27,10 @@ class SilenceConfig:
 
     sample_rate: int = 16_000
     # RMS above this counts as speech (float32 samples in [-1, 1]).
-    speech_rms: float = 0.015
+    # Defaults tuned for quiet laptop arrays (Realtek often peaks ~0.01–0.03).
+    speech_rms: float = 0.006
     # RMS below this counts as silence once speech has started.
-    silence_rms: float = 0.010
+    silence_rms: float = 0.004
     # How long silence must last after speech before we stop.
     silence_duration_s: float = 0.8
     # Give up if the user never starts speaking.

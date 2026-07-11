@@ -104,7 +104,10 @@ def listen_and_handle(
         transcript = (
             transcriber.transcribe(record.audio, sample_rate=record.sample_rate) or ""
         ).strip()
-    except Exception:  # noqa: BLE001 — STT must not freeze the loop
+    except Exception as exc:  # noqa: BLE001 — STT must not freeze the loop
+        import sys
+
+        print(f"[jarvis stt] {type(exc).__name__}: {exc}", file=sys.stderr)
         _maybe_unload_stt(transcriber, unload=unload_stt_after)
         reply = plain_error_reply("stt_failed")
         speaker.speak(reply)

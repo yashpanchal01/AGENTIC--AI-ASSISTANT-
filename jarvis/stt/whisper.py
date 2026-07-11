@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import gc
+import sys
 from pathlib import Path
 
 import numpy as np
 
 from jarvis.stt.dictionary import fix_terms, hotwords_string
+
+# Lighter CPU model when CUDA libs are broken / VRAM busy.
+_CPU_FALLBACK_MODEL = "small.en"
+_CPU_FALLBACK_COMPUTE = "int8"
 
 
 class WhisperTranscriber:
@@ -15,6 +20,9 @@ class WhisperTranscriber:
 
     Call :meth:`unload` between commands to free VRAM for games / other GPU
     apps (issue #9 coexistence fallback). The next :meth:`transcribe` reloads.
+
+    GPU load can succeed while encode still fails (e.g. missing
+    ``cublas64_12.dll``). :meth:`transcribe` then retries on CPU once.
     """
 
     def __init__(
@@ -47,25 +55,53 @@ class WhisperTranscriber:
     def is_loaded(self) -> bool:
         return self._model is not None
 
+    @property
+    def using_cpu_fallback(self) -> bool:
+        return self._using_cpu_fallback
+
+    def _load_gpu(self):
+        return self._WhisperModel(
+            self.model_name,
+            device=self._device,
+            compute_type=self._compute_type,
+        )
+
+    def _load_cpu(self):
+        return self._WhisperModel(
+            _CPU_FALLBACK_MODEL,
+            device="cpu",
+            compute_type=_CPU_FALLBACK_COMPUTE,
+        )
+
     def _ensure_model(self):
         if self._model is not None:
             return self._model
+        if self._device == "cpu":
+            self._model = self._load_cpu()
+            self._using_cpu_fallback = True
+            return self._model
         try:
-            self._model = self._WhisperModel(
-                self.model_name,
-                device=self._device,
-                compute_type=self._compute_type,
-            )
+            self._model = self._load_gpu()
             self._using_cpu_fallback = False
-        except Exception:
-            # CPU fallback keeps the loop usable if VRAM is busy.
-            self._model = self._WhisperModel(
-                "small.en",
-                device="cpu",
-                compute_type="int8",
+        except Exception as e:
+            print(
+                f"[jarvis stt] GPU model load failed ({type(e).__name__}: {e}); "
+                f"falling back to CPU {_CPU_FALLBACK_MODEL}.",
+                file=sys.stderr,
             )
+            self._model = self._load_cpu()
             self._using_cpu_fallback = True
         return self._model
+
+    def _switch_to_cpu(self, reason: BaseException) -> None:
+        print(
+            f"[jarvis stt] GPU transcription failed ({type(reason).__name__}: {reason}); "
+            f"retrying on CPU {_CPU_FALLBACK_MODEL}.",
+            file=sys.stderr,
+        )
+        self.unload()
+        self._model = self._load_cpu()
+        self._using_cpu_fallback = True
 
     def unload(self) -> None:
         """Drop the model and free GPU memory if possible.
@@ -84,12 +120,27 @@ class WhisperTranscriber:
         except Exception:  # noqa: BLE001 — torch optional / best-effort
             pass
 
+    def _run_transcribe(self, model, flat: np.ndarray, hot: str) -> str:
+        segments, _info = model.transcribe(
+            flat,
+            beam_size=5,
+            vad_filter=True,
+            language="en",
+            hotwords=hot or None,
+            initial_prompt=hot or None,
+        )
+        # Materialize eagerly so CUDA encode errors surface here (not later).
+        raw = " ".join(s.text.strip() for s in segments).strip()
+        if self.apply_term_fixes and raw:
+            raw = fix_terms(raw)
+        return raw
+
     def transcribe(self, audio: np.ndarray, *, sample_rate: int = 16_000) -> str:
         flat = np.asarray(audio, dtype=np.float32).reshape(-1)
         if flat.size < sample_rate // 4:
             return ""
 
-        # faster-whisper expects float32 mono at its native rate; resample if needed.
+        # faster-whisper expects float32 mono at 16 kHz; resample if needed.
         if sample_rate != 16_000:
             duration = flat.size / float(sample_rate)
             target_n = max(1, int(duration * 16_000))
@@ -99,15 +150,11 @@ class WhisperTranscriber:
 
         hot = hotwords_string(self.dictionary_path)
         model = self._ensure_model()
-        segments, _info = model.transcribe(
-            flat,
-            beam_size=5,
-            vad_filter=True,
-            language="en",
-            hotwords=hot or None,
-            initial_prompt=hot or None,
-        )
-        raw = " ".join(s.text.strip() for s in segments).strip()
-        if self.apply_term_fixes and raw:
-            raw = fix_terms(raw)
-        return raw
+        try:
+            return self._run_transcribe(model, flat, hot)
+        except Exception as e:
+            if self._using_cpu_fallback or self._device == "cpu":
+                raise
+            # Load can succeed while encode fails (missing cuBLAS, OOM, …).
+            self._switch_to_cpu(e)
+            return self._run_transcribe(self._model, flat, hot)

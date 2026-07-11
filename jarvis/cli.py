@@ -26,6 +26,7 @@ from jarvis.audio.capture import MicRecorder
 from jarvis.audio.silence import SilenceConfig
 from jarvis.brain.claude_code import ClaudeCodeBrain
 from jarvis.brain.fake import FakeBrain
+from jarvis.brain.grok_cli import GrokCliBrain
 from jarvis.config import JarvisConfig
 from jarvis.connectivity import SocketConnectivity
 from jarvis.confirm import FixedConfirmer, VoiceOrClickConfirmer, parse_yes_no
@@ -62,9 +63,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Continuous front door: local wake word + optional hotkey push-to-talk",
     )
     p.add_argument(
+        "--brain",
+        choices=("grok", "claude", "fake"),
+        default=None,
+        help="Brain provider (default: grok, or JARVIS_BRAIN). 'fake' = no cloud CLI",
+    )
+    p.add_argument(
         "--fake",
         action="store_true",
-        help="Use the in-process FakeBrain (no Claude CLI)",
+        help="Shortcut for --brain fake (no cloud brain CLI)",
     )
     p.add_argument(
         "--fake-stt",
@@ -107,7 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--model",
         default=None,
-        help="Claude model (default: sonnet, or JARVIS_MODEL)",
+        help="Brain model id (Claude: JARVIS_MODEL/sonnet; Grok: JARVIS_GROK_MODEL)",
     )
     p.add_argument(
         "--cwd",
@@ -185,10 +192,15 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def make_brain(config: JarvisConfig, *, fake: bool):
-    if fake:
+def make_brain(config: JarvisConfig, *, fake: bool = False, provider: str | None = None):
+    """Build the configured brain. Default provider is Grok (see JARVIS_BRAIN)."""
+    name = (provider or config.brain_provider or "grok").strip().lower()
+    if fake or name == "fake":
         return FakeBrain()
-    return ClaudeCodeBrain(config=config)
+    if name == "claude":
+        return ClaudeCodeBrain(config=config)
+    # Default / "grok"
+    return GrokCliBrain(config=config)
 
 
 def make_speaker(config: JarvisConfig, *, no_speak: bool):
@@ -612,7 +624,10 @@ def run_repl(
         "JARVIS  "
         "(type a command, :listen mic once, :n new session, :q quit)"
     )
-    if isinstance(brain, ClaudeCodeBrain):
+    if isinstance(brain, GrokCliBrain):
+        model = brain.config.grok_model or "(cli default)"
+        print(f"  brain: Grok CLI  model={model}")
+    elif isinstance(brain, ClaudeCodeBrain):
         print(f"  brain: Claude Code  model={brain.config.claude_model}")
     else:
         print("  brain: FakeBrain")
@@ -850,8 +865,17 @@ def main(argv: list[str] | None = None) -> int:
         config = apply_user_settings(config, load_settings(args.settings))
     else:
         config = JarvisConfig.from_env()
+    if args.brain:
+        config.brain_provider = args.brain
+    if args.fake:
+        config.brain_provider = "fake"
     if args.model:
-        config.claude_model = args.model
+        # Apply model to whichever cloud brain is selected.
+        if config.brain_provider == "claude":
+            config.claude_model = args.model
+        else:
+            config.grok_model = args.model
+            # Keep claude_model in sync only when explicitly on Claude.
     if args.cwd:
         config.cwd = args.cwd
     if args.no_speak:
@@ -887,16 +911,17 @@ def main(argv: list[str] | None = None) -> int:
 
         return run_overlay_demo()
 
-    brain = make_brain(config, fake=args.fake)
+    brain = make_brain(config, fake=args.fake, provider=config.brain_provider)
     speaker = make_speaker(config, no_speak=args.no_speak)
     use_overlay = _want_overlay(args)
     use_tray = _want_tray(args)
     # --fake enables sample Google data so demos work offline; real runs load
     # tokens via build_google_workspace when signed in. --no-google disables.
-    use_fake_google = bool(args.fake_google or (args.fake and not args.no_google))
+    use_fake = config.brain_provider == "fake" or args.fake
+    use_fake_google = bool(args.fake_google or (use_fake and not args.no_google))
     google = make_google(fake_google=use_fake_google, no_google=args.no_google)
     # Fake brain needs no network; skip connectivity pre-check so offline demos work.
-    connectivity = None if args.fake else make_connectivity(config)
+    connectivity = None if use_fake else make_connectivity(config)
     audit = _make_audit(args)
     # Shared across daemon cycles / REPL turns so "cancel" aborts in-flight work.
     long_tasks = LongTaskService(

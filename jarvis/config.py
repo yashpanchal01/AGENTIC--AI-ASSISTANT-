@@ -93,8 +93,23 @@ class JarvisConfig:
 
     approved_folders: tuple[Path, ...] = field(default_factory=_default_approved_folders)
     safe_tools: tuple[str, ...] = DEFAULT_SAFE_TOOLS
+    # Brain provider: "grok" (default while Claude limits are tight), "claude", or "fake".
+    brain_provider: str = "grok"
     claude_model: str = "sonnet"
     claude_bin: str = "claude"
+    grok_bin: str = "grok"
+    # Empty model → Grok CLI default (SuperGrok session). Set JARVIS_GROK_MODEL to pin.
+    grok_model: str = ""
+    # Grok headless tool allowlist (tool IDs, not Claude names).
+    grok_safe_tools: tuple[str, ...] = (
+        "run_terminal_cmd",
+        "read_file",
+        "list_dir",
+        "grep",
+        "search_replace",
+        "web_search",
+        "web_fetch",
+    )
     permission_mode: str = "acceptEdits"
     system_prompt: str = JARVIS_SYSTEM_PROMPT
     cwd: Path = field(default_factory=Path.cwd)
@@ -134,6 +149,11 @@ class JarvisConfig:
         skip the settings file (tests / explicit CLI-only paths).
         """
         model = os.environ.get("JARVIS_MODEL", "sonnet")
+        brain = os.environ.get("JARVIS_BRAIN", "grok").strip().lower()
+        if brain not in ("grok", "claude", "fake"):
+            brain = "grok"
+        grok_model = os.environ.get("JARVIS_GROK_MODEL", "").strip()
+        grok_bin = os.environ.get("JARVIS_GROK_BIN", "grok").strip() or "grok"
         speak = os.environ.get("JARVIS_SPEAK", "1") not in ("0", "false", "no")
         device = os.environ.get("JARVIS_WHISPER_DEVICE", "cuda")
         compute = os.environ.get("JARVIS_WHISPER_COMPUTE", "int8_float16")
@@ -169,7 +189,10 @@ class JarvisConfig:
         except ValueError:
             long_thresh = 20.0
         cfg = cls(
+            brain_provider=brain,
             claude_model=model,
+            grok_model=grok_model,
+            grok_bin=grok_bin,
             speak=speak,
             whisper_device=device,
             whisper_compute=compute,
