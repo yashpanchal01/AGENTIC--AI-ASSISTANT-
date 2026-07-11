@@ -86,10 +86,11 @@ def classify(utterance: str) -> GoogleIntent:
     lower = text.lower()
 
     # Writes first — never mis-route a send as a search.
-    if _WRITE_SEND.search(text):
-        return GoogleIntent(GoogleIntentKind.WRITE_SEND)
+    # Forward before send: "forward the email to X" also matches the send "email…to" pattern.
     if _WRITE_FORWARD.search(text):
         return GoogleIntent(GoogleIntentKind.WRITE_FORWARD)
+    if _WRITE_SEND.search(text):
+        return GoogleIntent(GoogleIntentKind.WRITE_SEND)
     if _WRITE_REPLY.search(text) and any(
         k in lower for k in ("email", "mail", "message", "thread", "inbox")
     ):
