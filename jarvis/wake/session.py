@@ -56,6 +56,8 @@ class FrontDoorSession:
     hotkey_controller: FakeHotkeyController | None = None
     acknowledge_text: str | None = "Yes?"
     on_cycle: Callable[[CycleResult], None] | None = None
+    connectivity: Any = None
+    unload_stt_after: bool = False
 
     _stop: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
     _hotkey_event: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
@@ -130,6 +132,8 @@ class FrontDoorSession:
             google=self.google,
             wake_phrases=self.wake_phrases,
             acknowledge_text=self.acknowledge_text,
+            connectivity=self.connectivity,
+            unload_stt_after=self.unload_stt_after,
         )
 
     def run(self, *, max_cycles: int | None = None) -> list[CycleResult]:

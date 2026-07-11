@@ -25,6 +25,7 @@ from jarvis.audio.silence import SilenceConfig
 from jarvis.brain.claude_code import ClaudeCodeBrain
 from jarvis.brain.fake import FakeBrain
 from jarvis.config import JarvisConfig
+from jarvis.connectivity import SocketConnectivity
 from jarvis.core import handle_command
 from jarvis.stt.fake import FakeTranscriber
 from jarvis.tts.fake import FakeSpeaker
@@ -222,15 +223,41 @@ def make_google(*, fake_google: bool, no_google: bool):
     return build_google_workspace(force_fake=fake_google)
 
 
-def run_once(command: str, *, brain, speaker, overlay=None, google=None) -> int:
+def make_connectivity(config: JarvisConfig):
+    """Real socket check when enabled; None skips the pre-check (tests / offline demos)."""
+    if not config.check_connectivity:
+        return None
+    return SocketConnectivity()
+
+
+def run_once(
+    command: str,
+    *,
+    brain,
+    speaker,
+    overlay=None,
+    google=None,
+    connectivity=None,
+) -> int:
     if overlay is not None:
         from jarvis.overlay.lifecycle import handle_command_with_overlay
 
         result = handle_command_with_overlay(
-            command, brain=brain, speaker=speaker, overlay=overlay, google=google
+            command,
+            brain=brain,
+            speaker=speaker,
+            overlay=overlay,
+            google=google,
+            connectivity=connectivity,
         )
     else:
-        result = handle_command(command, brain=brain, speaker=speaker, google=google)
+        result = handle_command(
+            command,
+            brain=brain,
+            speaker=speaker,
+            google=google,
+            connectivity=connectivity,
+        )
     _print_result(result)
     return 0 if result.ok else 1
 
@@ -244,6 +271,8 @@ def run_listen(
     announce: bool = True,
     overlay=None,
     google=None,
+    connectivity=None,
+    unload_stt_after: bool = False,
 ) -> int:
     if announce:
         print("Listening… (speak a command; ends on silence)")
@@ -258,6 +287,8 @@ def run_listen(
                 speaker=speaker,
                 overlay=overlay,
                 google=google,
+                connectivity=connectivity,
+                unload_stt_after=unload_stt_after,
             )
         else:
             outcome = listen_and_handle(
@@ -266,6 +297,8 @@ def run_listen(
                 brain=brain,
                 speaker=speaker,
                 google=google,
+                connectivity=connectivity,
+                unload_stt_after=unload_stt_after,
             )
     except RuntimeError as e:
         print(f"JARVIS> voice error: {e}", file=sys.stderr)
@@ -275,6 +308,8 @@ def run_listen(
         msg = {
             "no_speech": "I didn't hear anything.",
             "empty_transcript": "I heard sound but couldn't transcribe it.",
+            "stt_failed": "I couldn't transcribe that.",
+            "brain_unreachable": "My brain is unreachable right now.",
         }.get(outcome.error, outcome.error)
         print(f"JARVIS> {msg}")
         return 1
@@ -295,6 +330,7 @@ def run_daemon(
     detector,
     overlay=None,
     google=None,
+    connectivity=None,
     max_cycles: int | None = None,
     frames_factory=None,
     hotkey_controller=None,
@@ -312,27 +348,21 @@ def run_daemon(
         print("  Say the wake word or press the hotkey for each command. Ctrl+C to stop.")
         print()
 
-    session_kwargs = dict(
+    session = FrontDoorSession(
         detector=detector,
         recorder=recorder,
         transcriber=transcriber,
         brain=brain,
         speaker=speaker,
         overlay=overlay,
+        google=google,
         hotkey=config.hotkey,
         enable_hotkey=config.enable_hotkey,
         frames_factory=frames_factory,
         hotkey_controller=hotkey_controller,
+        connectivity=connectivity,
+        unload_stt_after=config.unload_stt_between_commands,
     )
-    # Pass google when FrontDoorSession supports it (forward-compatible).
-    try:
-        import inspect
-
-        if "google" in inspect.signature(FrontDoorSession).parameters:
-            session_kwargs["google"] = google
-    except (TypeError, ValueError):
-        pass
-    session = FrontDoorSession(**session_kwargs)
 
     def on_cycle(cycle) -> None:
         src = cycle.source
@@ -374,6 +404,7 @@ def run_repl(
     config: JarvisConfig,
     fake_stt: str | None,
     google=None,
+    connectivity=None,
 ) -> int:
     print(
         "JARVIS  "
@@ -426,10 +457,18 @@ def run_repl(
                 recorder=recorder,
                 transcriber=transcriber,
                 google=google,
+                connectivity=connectivity,
+                unload_stt_after=config.unload_stt_between_commands,
             )
             continue
 
-        result = handle_command(line, brain=brain, speaker=speaker, google=google)
+        result = handle_command(
+            line,
+            brain=brain,
+            speaker=speaker,
+            google=google,
+            connectivity=connectivity,
+        )
         _print_result(result)
 
     print("bye")
@@ -560,6 +599,8 @@ def main(argv: list[str] | None = None) -> int:
     # tokens via build_google_workspace when signed in. --no-google disables.
     use_fake_google = bool(args.fake_google or (args.fake and not args.no_google))
     google = make_google(fake_google=use_fake_google, no_google=args.no_google)
+    # Fake brain needs no network; skip connectivity pre-check so offline demos work.
+    connectivity = None if args.fake else make_connectivity(config)
 
     if args.daemon:
         if args.once is not None or args.listen:
@@ -617,6 +658,7 @@ def main(argv: list[str] | None = None) -> int:
                 detector=detector,
                 overlay=overlay,
                 google=google,
+                connectivity=connectivity,
                 max_cycles=args.max_cycles,
                 frames_factory=frames_factory,
                 announce=True,
@@ -651,6 +693,8 @@ def main(argv: list[str] | None = None) -> int:
                     announce=args.fake_stt is None,
                     overlay=ov,
                     google=google,
+                    connectivity=connectivity,
+                    unload_stt_after=config.unload_stt_between_commands,
                 )
             )
         return run_listen(
@@ -660,6 +704,8 @@ def main(argv: list[str] | None = None) -> int:
             transcriber=transcriber,
             announce=args.fake_stt is None,
             google=google,
+            connectivity=connectivity,
+            unload_stt_after=config.unload_stt_between_commands,
         )
 
     if args.once is not None:
@@ -671,9 +717,16 @@ def main(argv: list[str] | None = None) -> int:
                     speaker=speaker,
                     overlay=ov,
                     google=google,
+                    connectivity=connectivity,
                 )
             )
-        return run_once(args.once, brain=brain, speaker=speaker, google=google)
+        return run_once(
+            args.once,
+            brain=brain,
+            speaker=speaker,
+            google=google,
+            connectivity=connectivity,
+        )
 
     if args.overlay and not args.daemon:
         print(
@@ -689,6 +742,7 @@ def main(argv: list[str] | None = None) -> int:
         config=config,
         fake_stt=None,
         google=google,
+        connectivity=connectivity,
     )
 
 

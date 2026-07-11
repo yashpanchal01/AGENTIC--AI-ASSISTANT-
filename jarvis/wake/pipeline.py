@@ -9,17 +9,21 @@ No open-mic follow-up window lives here.
 
 from __future__ import annotations
 
-from typing import Callable, Literal
+from typing import TYPE_CHECKING, Callable, Literal
 
 from jarvis.audio.capture import MicRecorder, RecordResult
 from jarvis.brain.base import Brain
 from jarvis.core import handle_command
 from jarvis.overlay.base import Overlay
 from jarvis.overlay.states import OverlayState
+from jarvis.plain_replies import plain_error_reply
 from jarvis.stt.base import Transcriber
 from jarvis.tts.base import Speaker
-from jarvis.voice import ListenResult
+from jarvis.voice import ListenResult, _maybe_unload_stt
 from jarvis.wake.phrases import DEFAULT_WAKE_PHRASES, strip_wake_phrase
+
+if TYPE_CHECKING:
+    from jarvis.connectivity import Connectivity
 
 TriggerSource = Literal["wake", "hotkey"]
 
@@ -38,14 +42,30 @@ def _empty_record(sample_rate: int = 16_000) -> RecordResult:
 def _transcribe_record(
     record: RecordResult,
     transcriber: Transcriber,
+    *,
+    unload_stt_after: bool = False,
 ) -> tuple[str, str | None]:
-    """Return (transcript, error_code)."""
+    """Return (transcript, error_code). Speaks nothing — caller speaks on error."""
     if record.audio.size == 0 or not record.heard_speech:
         return "", "no_speech"
-    text = (transcriber.transcribe(record.audio, sample_rate=record.sample_rate) or "").strip()
+    try:
+        text = (
+            transcriber.transcribe(record.audio, sample_rate=record.sample_rate) or ""
+        ).strip()
+    except Exception:  # noqa: BLE001 — STT must not freeze the armed path
+        _maybe_unload_stt(transcriber, unload=unload_stt_after)
+        return "", "stt_failed"
+    _maybe_unload_stt(transcriber, unload=unload_stt_after)
     if not text:
         return "", "empty_transcript"
     return text, None
+
+
+def _speak_local_error(speaker: Speaker, error: str) -> None:
+    try:
+        speaker.speak(plain_error_reply(error))
+    except Exception:  # noqa: BLE001 — still return the error code
+        pass
 
 
 def run_armed_pipeline(
@@ -60,20 +80,33 @@ def run_armed_pipeline(
     wake_phrases: tuple[str, ...] = DEFAULT_WAKE_PHRASES,
     on_two_step_ready: Callable[[], None] | None = None,
     acknowledge_text: str | None = "Yes?",
+    connectivity: Connectivity | None = None,
+    unload_stt_after: bool = False,
 ) -> ListenResult:
     """Single command after arming (wake or hotkey). Shared entry point.
 
     One-breath (wake): transcript may still contain the wake phrase — strip it.
     Two-step (wake): if only the wake phrase remains, acknowledge and record again.
     Hotkey: no wake stripping; one record → STT → handle_command.
+
+    Local failures are spoken in plain language. Overlay always returns to REST.
+    ARMED is only held while the mic is recording (not during STT).
     """
     if overlay is not None:
         overlay.set_state(OverlayState.ARMED)
 
+    rest_owned_by_handler = False
     try:
         record = recorder.record_until_silence()
-        raw, err = _transcribe_record(record, transcriber)
+        # Mic is no longer hot — leave ARMED before multi-second STT.
+        if overlay is not None:
+            overlay.set_state(OverlayState.WORKING)
+
+        raw, err = _transcribe_record(
+            record, transcriber, unload_stt_after=unload_stt_after
+        )
         if err:
+            _speak_local_error(speaker, err)
             return ListenResult(
                 transcript=raw,
                 command=None,
@@ -89,7 +122,6 @@ def run_armed_pipeline(
                 if on_two_step_ready is not None:
                     on_two_step_ready()
                 elif acknowledge_text and hasattr(speaker, "speak"):
-                    # Brief audible cue; FakeSpeaker records it for assertions.
                     try:
                         speaker.speak(acknowledge_text)
                     except Exception:
@@ -98,19 +130,25 @@ def run_armed_pipeline(
                     overlay.set_state(OverlayState.ARMED)
 
                 record = recorder.record_until_silence()
-                raw2, err2 = _transcribe_record(record, transcriber)
+                if overlay is not None:
+                    overlay.set_state(OverlayState.WORKING)
+
+                raw2, err2 = _transcribe_record(
+                    record, transcriber, unload_stt_after=unload_stt_after
+                )
                 if err2:
+                    _speak_local_error(speaker, err2)
                     return ListenResult(
                         transcript=raw2,
                         command=None,
                         record=record,
                         error=err2,
                     )
-                # Second utterance is the command (still strip if user re-said wake).
                 command_text = strip_wake_phrase(raw2, wake_phrases) or raw2
                 raw = raw2
 
         if not command_text.strip():
+            _speak_local_error(speaker, "empty_transcript")
             return ListenResult(
                 transcript=raw,
                 command=None,
@@ -121,16 +159,22 @@ def run_armed_pipeline(
         if overlay is not None:
             from jarvis.overlay.lifecycle import handle_command_with_overlay
 
+            rest_owned_by_handler = True
             result = handle_command_with_overlay(
                 command_text,
                 brain=brain,
                 speaker=speaker,
                 overlay=overlay,
                 google=google,
+                connectivity=connectivity,
             )
         else:
             result = handle_command(
-                command_text, brain=brain, speaker=speaker, google=google
+                command_text,
+                brain=brain,
+                speaker=speaker,
+                google=google,
+                connectivity=connectivity,
             )
 
         return ListenResult(
@@ -139,5 +183,5 @@ def run_armed_pipeline(
             record=record,
         )
     finally:
-        if overlay is not None:
+        if overlay is not None and not rest_owned_by_handler:
             overlay.set_state(OverlayState.REST)

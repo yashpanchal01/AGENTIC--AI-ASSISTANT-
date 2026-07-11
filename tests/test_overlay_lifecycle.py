@@ -91,14 +91,13 @@ def test_listen_drives_armed_then_full_lifecycle() -> None:
     # After recording, ARMED ends (WORKING during STT) before HEARD.
     first_working = states.index(OverlayState.WORKING)
     first_heard = states.index(OverlayState.HEARD)
-    assert first_working < first_heard  # STT working precedes heard transcript
+    assert first_working < first_heard
     assert OverlayState.SPEAKING in states
     assert states[-1] is OverlayState.REST
-    # Only one REST at the end (no double REST from nested finally).
     assert states.count(OverlayState.REST) == 1
 
 
-def test_listen_no_speech_returns_to_rest_without_working() -> None:
+def test_listen_no_speech_returns_to_rest_and_speaks() -> None:
     brain = FakeBrain(script=[BrainTurn(reply="nope", actions=())])
     speaker = FakeSpeaker()
     overlay = FakeOverlay()
@@ -122,18 +121,17 @@ def test_listen_no_speech_returns_to_rest_without_working() -> None:
 
     assert not outcome.ok
     assert outcome.error == "no_speech"
-    assert speaker.spoken == []
+    assert speaker.spoken  # plain-language spoken error
     assert OverlayState.ARMED in overlay.states
-    assert OverlayState.WORKING not in overlay.states
-    assert OverlayState.SPEAKING not in overlay.states
+    assert OverlayState.HEARD not in overlay.states
     assert overlay.states[-1] is OverlayState.REST
 
 
-def test_listen_empty_transcript_returns_to_rest_without_speaking() -> None:
+def test_listen_empty_transcript_returns_to_rest_without_heard() -> None:
     brain = FakeBrain(script=[BrainTurn(reply="nope", actions=())])
     speaker = FakeSpeaker()
     overlay = FakeOverlay()
-    stt = FakeTranscriber(text="")  # STT produced nothing usable
+    stt = FakeTranscriber(text="")
     sr = 16_000
     speech = np.full(int(sr * 0.5), 0.2, dtype=np.float32)
     quiet = np.zeros(int(sr * 1.0), dtype=np.float32)
@@ -154,9 +152,8 @@ def test_listen_empty_transcript_returns_to_rest_without_speaking() -> None:
 
     assert not outcome.ok
     assert outcome.error == "empty_transcript"
-    assert speaker.spoken == []
+    assert speaker.spoken
     assert OverlayState.ARMED in overlay.states
-    # STT working is allowed; HEARD/SPEAKING must not appear without a transcript.
+    assert OverlayState.WORKING in overlay.states  # STT phase
     assert OverlayState.HEARD not in overlay.states
-    assert OverlayState.SPEAKING not in overlay.states
     assert overlay.states[-1] is OverlayState.REST
