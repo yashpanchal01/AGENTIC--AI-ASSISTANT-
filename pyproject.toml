@@ -11,6 +11,42 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+voice = [
+    "numpy>=1.26",
+    "sounddevice>=0.4",
+    "faster-whisper>=1.0",
+]
+wake = [
+    "numpy>=1.26",
+    "sounddevice>=0.4",
+    "openwakeword>=0.6.0",
+    "pvporcupine>=3.0.0",
+    "pynput>=1.7",
+]
+ui = [
+    "PySide6>=6.6",
+]
+google = [
+    "google-auth>=2.0",
+    "google-auth-oauthlib>=1.0",
+    "google-auth-httplib2>=0.2",
+    "google-api-python-client>=2.0",
+]
+all = [
+    "pytest>=8.0",
+    "numpy>=1.26",
+    "sounddevice>=0.4",
+    "faster-whisper>=1.0",
+    "openwakeword>=0.6.0",
+    "pvporcupine>=3.0.0",
+    "pynput>=1.7",
+    "PySide6>=6.6",
+    "google-auth>=2.0",
+    "google-auth-oauthlib>=1.0",
+    "google-auth-httplib2>=0.2",
+    "google-api-python-client>=2.0",
+]
+
 
 [project.scripts]
 jarvis = "jarvis.cli:main"

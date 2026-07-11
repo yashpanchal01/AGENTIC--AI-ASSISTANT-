@@ -1,0 +1,18 @@
+# JARVIS dictionary — one word or name per line.
+# Whisper is biased toward these (hotwords / initial_prompt).
+# Lines starting with '#' are ignored.
+# Edits apply on the next listen.
+
+Jarvis
+Claude Code
+Claude
+Whisper
+Piper
+GitHub
+Python
+VS Code
+API
+Anthropic
+Gmail
+Spotify
+Notepad
