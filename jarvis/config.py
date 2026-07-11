@@ -29,6 +29,9 @@ JARVIS_SYSTEM_PROMPT = (
     "Never read, store, or speak passwords, API keys, or credentials. "
     "Gmail and Calendar are handled by JARVIS itself (read-only); do not send, "
     "reply, forward email or create calendar events. "
+    "When something fails (file not found, app missing, tool error), explain in "
+    "one short plain sentence what went wrong and why — never fail silently and "
+    "never return a stack trace. "
     "Reply in one short spoken-style sentence when done."
 )
 
@@ -110,6 +113,11 @@ class JarvisConfig:
     # Google OAuth (issue 7) — paths only; tokens never under memory notes
     google_client_secrets: Path | None = None
     google_token_path: Path | None = None
+    # Graceful degradation (issue 9)
+    # Pre-check internet before calling the cloud brain (skip with JARVIS_CHECK_NET=0).
+    check_connectivity: bool = True
+    # Free Whisper VRAM between commands so games can coexist (JARVIS_UNLOAD_STT=1).
+    unload_stt_between_commands: bool = False
 
     @classmethod
     def from_env(cls) -> JarvisConfig:
@@ -134,6 +142,16 @@ class JarvisConfig:
         pico = os.environ.get("PICOVOICE_ACCESS_KEY") or None
         secrets = os.environ.get("JARVIS_GOOGLE_CLIENT_SECRETS")
         token = os.environ.get("JARVIS_GOOGLE_TOKEN")
+        check_net = os.environ.get("JARVIS_CHECK_NET", "1") not in (
+            "0",
+            "false",
+            "no",
+        )
+        unload_stt = os.environ.get("JARVIS_UNLOAD_STT", "0") in (
+            "1",
+            "true",
+            "yes",
+        )
         return cls(
             claude_model=model,
             speak=speak,
@@ -146,4 +164,6 @@ class JarvisConfig:
             picovoice_access_key=pico,
             google_client_secrets=Path(secrets) if secrets else None,
             google_token_path=Path(token) if token else None,
+            check_connectivity=check_net,
+            unload_stt_between_commands=unload_stt,
         )

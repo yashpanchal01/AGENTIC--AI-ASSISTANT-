@@ -13,6 +13,7 @@ from pathlib import Path
 
 from jarvis.brain.stream_json import parse_stream_json_lines
 from jarvis.config import DEFAULT_SAFE_TOOLS, JARVIS_SYSTEM_PROMPT, JarvisConfig
+from jarvis.plain_replies import BRAIN_UNREACHABLE, looks_like_network_failure
 from jarvis.types import BrainTurn
 
 
@@ -55,6 +56,9 @@ class ClaudeCodeBrain:
         lines = (proc.stdout or "").splitlines()
         turn = parse_stream_json_lines(lines)
         stderr = (proc.stderr or "").strip()
+        combined_err = " ".join(
+            p for p in (turn.error or "", turn.reply or "", stderr) if p
+        )
 
         if turn.session_id:
             self.session_id = turn.session_id
@@ -70,8 +74,21 @@ class ClaudeCodeBrain:
 
         session = self.session_id or turn.session_id
 
+        if looks_like_network_failure(combined_err):
+            return BrainTurn(
+                reply=BRAIN_UNREACHABLE,
+                actions=turn.actions,
+                session_id=session,
+                denied=turn.denied,
+                ok=False,
+                error="brain_unreachable",
+            )
+
         if proc.returncode != 0:
             reply = turn.reply or (stderr[:300] if stderr else "The brain process failed.")
+            # Never dump raw stack traces as the spoken line.
+            if reply and ("Traceback" in reply or (len(reply) > 200 and "Error:" in reply)):
+                reply = "Something went wrong talking to my brain."
             return BrainTurn(
                 reply=reply,
                 actions=turn.actions,

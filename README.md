@@ -150,6 +150,8 @@ py -3.13 -m jarvis --demo-overlay
 | `JARVIS_WHISPER_DEVICE` | `cuda` (default) or `cpu` |
 | `JARVIS_WHISPER_COMPUTE` | default `int8_float16` (fits 6 GB VRAM) |
 | `JARVIS_DICTIONARY` | Path to hotwords file (default `./dictionary.txt`) |
+| `JARVIS_CHECK_NET` | `0` to skip offline pre-check before the cloud brain (default on) |
+| `JARVIS_UNLOAD_STT` | `1` to free Whisper VRAM between commands (GPU coexistence) |
 | `JARVIS_HOTKEY` | Push-to-talk combo (default `ctrl+shift+j`) |
 | `JARVIS_HOTKEY_ENABLE` | `0` to disable hotkey |
 | `JARVIS_WAKE_THRESHOLD` | openWakeWord threshold (default `0.5`) |
@@ -158,6 +160,15 @@ py -3.13 -m jarvis --demo-overlay
 | `JARVIS_GOOGLE_CLIENT_SECRETS` | Path to Google OAuth Desktop client JSON |
 | `JARVIS_GOOGLE_TOKEN` | Override path for stored OAuth tokens |
 | `JARVIS_MEMORY_DIR` | Markdown memory root (tokens are *never* stored here) |
+
+### Graceful degradation (GitHub #9)
+
+- Failures are **spoken in plain language** (never silent, never a stack trace).
+- Offline: a short TCP check runs before the cloud brain. If the network is
+  down, wake word / STT / Piper still work and JARVIS says its brain is
+  unreachable (`JARVIS_CHECK_NET=0` skips the pre-check).
+- VRAM: set `JARVIS_UNLOAD_STT=1` to free the Whisper model between commands so
+  games can share the 6 GB GPU. Bench notes: `benches/vram_coexist/`.
 
 ### Hotwords / dictionary
 
