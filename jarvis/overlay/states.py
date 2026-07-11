@@ -13,6 +13,8 @@ class OverlayState(str, Enum):
     HEARD = "heard"
     WORKING = "working"
     SPEAKING = "speaking"
+    # Ask-first gate (issue 06): preview the exact proposed action; yes/no.
+    CONFIRM = "confirm"
 
 
 # User-facing titles drawn on the pill (kept short for the Mono chrome).
@@ -22,6 +24,7 @@ STATE_TITLE: dict[OverlayState, str] = {
     OverlayState.HEARD: "Heard",
     OverlayState.WORKING: "Working…",
     OverlayState.SPEAKING: "Speaking",
+    OverlayState.CONFIRM: "Confirm?",
 }
 
 # States that keep the overlay visible (vs faded out at REST).
@@ -31,5 +34,6 @@ ACTIVE_STATES: frozenset[OverlayState] = frozenset(
         OverlayState.HEARD,
         OverlayState.WORKING,
         OverlayState.SPEAKING,
+        OverlayState.CONFIRM,
     }
 )

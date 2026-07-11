@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 import random
+import threading
 import time
 from pathlib import Path
 
@@ -74,6 +75,7 @@ class AuroraOverlay(QtWidgets.QWidget):
         OverlayState.HEARD: (QtGui.QColor("#d8d8e4"), QtGui.QColor("#7a7a8c")),
         OverlayState.WORKING: (QtGui.QColor("#c9c9d4"), QtGui.QColor("#77778a")),
         OverlayState.SPEAKING: (QtGui.QColor("#e8e8f0"), QtGui.QColor("#9090a0")),
+        OverlayState.CONFIRM: (QtGui.QColor("#ffe0a0"), QtGui.QColor("#c49a4a")),
     }
     # Dot carries mode colour (quiet Mono chrome).
     DOT: dict[OverlayState, QtGui.QColor] = {
@@ -81,6 +83,7 @@ class AuroraOverlay(QtWidgets.QWidget):
         OverlayState.HEARD: QtGui.QColor("#5eb8ff"),  # transcript ready
         OverlayState.WORKING: QtGui.QColor("#ffb02e"),  # thinking
         OverlayState.SPEAKING: QtGui.QColor("#34d399"),  # reply playing
+        OverlayState.CONFIRM: QtGui.QColor("#fbbf24"),  # ask-first
     }
 
     FADE_MS = 200
@@ -122,6 +125,15 @@ class AuroraOverlay(QtWidgets.QWidget):
 
         self.f_title = QtGui.QFont("Segoe UI", 10, QtGui.QFont.DemiBold)
         self.f_prev = QtGui.QFont("Segoe UI", 9)
+        self.f_btn = QtGui.QFont("Segoe UI", 9, QtGui.QFont.DemiBold)
+
+        # Ask-first click backup (issue 06). Input is only accepted in CONFIRM.
+        self._confirm_armed = False
+        self._confirm_result: bool | None = None
+        self._confirm_event = threading.Event()
+        self._yes_rect = QtCore.QRectF()
+        self._no_rect = QtCore.QRectF()
+        self._input_enabled = False
 
         # Marshal worker-thread set_state onto the UI thread (queued).
         self._bridge = _StateBridge(self)
@@ -157,15 +169,113 @@ class AuroraOverlay(QtWidgets.QWidget):
     @QtCore.Slot(object)
     def _apply_snapshot(self, snap: object) -> None:
         state, transcript, level = snap  # type: ignore[misc]
+        prev = self.state
         self.state = state
         if transcript is not None:
             self.preview = transcript
         if level is not None:
             self.level = level
+        # Accept mouse only while confirming — never steal keyboard focus.
+        if state is OverlayState.CONFIRM:
+            self._set_input_enabled(True)
+        elif prev is OverlayState.CONFIRM or self._input_enabled:
+            if not self._confirm_armed:
+                self._set_input_enabled(False)
 
     def close(self) -> None:  # noqa: A003 — matches Overlay protocol name
         self.timer.stop()
+        self.disarm_confirm()
         super().close()
+
+    # -- Confirm click backup -------------------------------------------------
+
+    def arm_confirm(self) -> None:
+        """Reset click decision and accept mouse for Yes/No hit targets."""
+        self._confirm_result = None
+        self._confirm_event.clear()
+        self._confirm_armed = True
+        self._set_input_enabled(True)
+
+    def disarm_confirm(self) -> None:
+        self._confirm_armed = False
+        self._set_input_enabled(False)
+
+    def take_confirm_decision(self) -> bool | None:
+        """Non-blocking take-and-clear of a clicked decision (matches FakeOverlay)."""
+        decision = self._confirm_result
+        if decision is not None:
+            self._confirm_result = None
+            self._confirm_event.clear()
+        return decision
+
+    def wait_confirm(self, timeout_s: float = 30.0) -> bool | None:
+        """Block until Yes/No is clicked or *timeout_s* elapses (None on timeout).
+
+        Clears the stored decision after a successful wait (take-and-clear).
+        """
+        ok = self._confirm_event.wait(timeout=max(0.0, timeout_s))
+        if not ok:
+            return None
+        decision = self._confirm_result
+        self._confirm_result = None
+        self._confirm_event.clear()
+        return decision
+
+    def _set_input_enabled(self, enabled: bool) -> None:
+        """Toggle TransparentForInput only — keep DoesNotAcceptFocus always on."""
+        if enabled == self._input_enabled:
+            return
+        self._input_enabled = enabled
+        if QtCore.QThread.currentThread() is self.thread():
+            self._apply_window_input_flags(enabled)
+        else:
+            QtCore.QMetaObject.invokeMethod(
+                self,
+                "_apply_window_input_flags",
+                QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(bool, enabled),
+            )
+
+    @QtCore.Slot(bool)
+    def _apply_window_input_flags(self, enabled: bool) -> None:
+        flags = self.windowFlags()
+        if enabled:
+            flags &= ~QtCore.Qt.WindowTransparentForInput
+        else:
+            flags |= QtCore.Qt.WindowTransparentForInput
+        # Preserve focus-free + topmost tool chrome.
+        flags |= (
+            QtCore.Qt.FramelessWindowHint
+            | QtCore.Qt.WindowStaysOnTopHint
+            | QtCore.Qt.Tool
+            | QtCore.Qt.WindowDoesNotAcceptFocus
+        )
+        self.setWindowFlags(flags)
+        self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating)
+        self.setFocusPolicy(QtCore.Qt.NoFocus)
+        if self.state in ACTIVE_STATES and self._opacity > 0.04:
+            self.show()
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+        # Only accept Yes/No while the gate is armed — not merely when paint
+        # still shows CONFIRM after disarm / follow-up speech.
+        if not self._confirm_armed:
+            return
+        pos = event.position() if hasattr(event, "position") else event.localPos()
+        pt = QtCore.QPointF(pos)
+        if self._yes_rect.contains(pt):
+            self._resolve_confirm(True)
+            event.accept()
+            return
+        if self._no_rect.contains(pt):
+            self._resolve_confirm(False)
+            event.accept()
+            return
+        event.ignore()
+
+    def _resolve_confirm(self, yes: bool) -> None:
+        self._confirm_result = bool(yes)
+        self._confirm_event.set()
 
     # -- Harness helpers ------------------------------------------------------
 
@@ -195,7 +305,10 @@ class AuroraOverlay(QtWidgets.QWidget):
     # -- Animation ------------------------------------------------------------
 
     def _pill_h(self) -> int:
-        return self.BASE_H + (len(self._lines) * 17 + 8 if self._lines else 0)
+        extra = len(self._lines) * 17 + 8 if self._lines else 0
+        if self._shown_state is OverlayState.CONFIRM or self.state is OverlayState.CONFIRM:
+            extra += 28  # Yes / No row
+        return self.BASE_H + extra
 
     def _place(self, ph: float | None = None) -> None:
         ph_i = self.BASE_H if ph is None else int(round(ph))
@@ -224,6 +337,8 @@ class AuroraOverlay(QtWidgets.QWidget):
                 target = 3 + 9.0 * syll
             elif state is OverlayState.WORKING:
                 target = 3 + 6.5 * abs(math.sin(self._tick * 0.22 - i * 0.45))
+            elif state is OverlayState.CONFIRM:
+                target = 3 + 4.0 * abs(math.sin(self._tick * 0.12 + i * 0.35))
             else:  # heard / rest
                 target = 3 + 2.0 * abs(math.sin(self._tick * 0.08 + i * 0.3))
             target = min(target, 13.0)
@@ -360,6 +475,33 @@ class AuroraOverlay(QtWidgets.QWidget):
                     QtCore.QPointF(x0, py + self.BASE_H + 4 + (i + 0.75) * 17),
                     ln,
                 )
+
+        # Yes / No hit targets when confirming (click backup for voice gate).
+        if state is OverlayState.CONFIRM:
+            btn_y = py + self.BASE_H + (len(self._lines) * 17 + 6 if self._lines else 4)
+            btn_h = 20.0
+            btn_w = 56.0
+            gap = 10.0
+            total_w = btn_w * 2 + gap
+            bx = px + (self.PILL_W - total_w) / 2
+            self._yes_rect = QtCore.QRectF(bx, btn_y, btn_w, btn_h)
+            self._no_rect = QtCore.QRectF(bx + btn_w + gap, btn_y, btn_w, btn_h)
+            for rect, label, fill in (
+                (self._yes_rect, "Yes", QtGui.QColor(52, 211, 153, 60)),
+                (self._no_rect, "No", QtGui.QColor(255, 92, 106, 50)),
+            ):
+                path = QtGui.QPainterPath()
+                path.addRoundedRect(rect, 6, 6)
+                p.fillPath(path, fill)
+                p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 40), 1.0))
+                p.drawPath(path)
+                p.setFont(self.f_btn)
+                p.setPen(self.TEXT)
+                p.drawText(rect, QtCore.Qt.AlignCenter, label)
+        else:
+            self._yes_rect = QtCore.QRectF()
+            self._no_rect = QtCore.QRectF()
+
         p.end()
 
 

@@ -8,6 +8,8 @@ Usage:
   py -3.13 -m jarvis --daemon         # wake word + hotkey front door (continuous)
   py -3.13 -m jarvis --overlay --listen
   py -3.13 -m jarvis --overlay --daemon
+  py -3.13 -m jarvis --install-autostart
+  py -3.13 -m jarvis --uninstall-autostart
   py -3.13 -m jarvis --shoot-overlay
   py -3.13 -m jarvis --demo-overlay
 """
@@ -26,8 +28,10 @@ from jarvis.brain.claude_code import ClaudeCodeBrain
 from jarvis.brain.fake import FakeBrain
 from jarvis.config import JarvisConfig
 from jarvis.connectivity import SocketConnectivity
+from jarvis.confirm import FixedConfirmer, VoiceOrClickConfirmer, parse_yes_no
 from jarvis.core import handle_command
 from jarvis.stt.fake import FakeTranscriber
+from jarvis.tasks import LongTaskService
 from jarvis.tts.fake import FakeSpeaker
 from jarvis.tts.piper import PiperSpeaker
 from jarvis.voice import listen_and_handle
@@ -152,6 +156,32 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable Gmail/Calendar integration for this run",
     )
+    p.add_argument(
+        "--install-autostart",
+        action="store_true",
+        help="Register JARVIS --daemon to start with Windows (HKCU Run key), then exit",
+    )
+    p.add_argument(
+        "--uninstall-autostart",
+        action="store_true",
+        help="Remove JARVIS from Windows startup, then exit",
+    )
+    p.add_argument(
+        "--no-tray",
+        action="store_true",
+        help="Do not show the system tray icon in --daemon mode",
+    )
+    p.add_argument(
+        "--no-audit",
+        action="store_true",
+        help="Disable the append-only audit log for this run",
+    )
+    p.add_argument(
+        "--settings",
+        type=Path,
+        default=None,
+        help="Path to settings.json (default: %%USERPROFILE%%\\.jarvis\\settings.json)",
+    )
     return p
 
 
@@ -227,6 +257,68 @@ def make_connectivity(config: JarvisConfig):
     return SocketConnectivity()
 
 
+def make_confirmer(
+    *,
+    interactive: bool = True,
+    overlay=None,
+    recorder=None,
+    transcriber=None,
+):
+    """Build a Confirmer for CLI / listen / daemon.
+
+    Priority:
+      - interactive TTY → stdin y/n (with overlay click re-check)
+      - mic available → voice yes/no + overlay click
+      - overlay only → wait for Yes/No click
+      - else → FixedConfirmer(False) safe decline
+    """
+    if interactive and sys.stdin.isatty() and recorder is None:
+        def _decide(prompt: str, proposed_action: str) -> bool:
+            print(f"  confirm: {proposed_action}")
+            print(
+                "  [y/n] (or click Yes/No on overlay)",
+                flush=True,
+            )
+            if overlay is not None:
+                take = getattr(overlay, "take_confirm_decision", None)
+                if callable(take):
+                    clicked = take()
+                    if clicked is not None:
+                        return bool(clicked)
+            try:
+                line = input("  > ").strip()
+            except EOFError:
+                return False
+            if overlay is not None:
+                take = getattr(overlay, "take_confirm_decision", None)
+                if callable(take):
+                    clicked = take()
+                    if clicked is not None:
+                        return bool(clicked)
+            parsed = parse_yes_no(line)
+            # Unclear → False (safe decline).
+            return bool(parsed) if parsed is not None else False
+
+        from jarvis.confirm import CallableConfirmer
+
+        return CallableConfirmer(decide=_decide)
+
+    if recorder is not None and transcriber is not None:
+        return VoiceOrClickConfirmer(
+            overlay=overlay,
+            recorder=recorder,
+            transcriber=transcriber,
+            default=False,
+        )
+
+    if overlay is not None:
+        from jarvis.confirm import OverlayClickConfirmer
+
+        return OverlayClickConfirmer(overlay=overlay, default=False)
+
+    return FixedConfirmer(answer=False)
+
+
 def run_once(
     command: str,
     *,
@@ -235,7 +327,13 @@ def run_once(
     overlay=None,
     google=None,
     connectivity=None,
+    long_tasks=None,
+    confirmer=None,
+    long_task_threshold_s: float | None = None,
+    audit=None,
 ) -> int:
+    if confirmer is None:
+        confirmer = make_confirmer(interactive=sys.stdin.isatty(), overlay=overlay)
     if overlay is not None:
         from jarvis.overlay.lifecycle import handle_command_with_overlay
 
@@ -246,6 +344,10 @@ def run_once(
             overlay=overlay,
             google=google,
             connectivity=connectivity,
+            long_tasks=long_tasks,
+            confirmer=confirmer,
+            long_task_threshold_s=long_task_threshold_s,
+            audit=audit,
         )
     else:
         result = handle_command(
@@ -254,9 +356,49 @@ def run_once(
             speaker=speaker,
             google=google,
             connectivity=connectivity,
+            long_tasks=long_tasks,
+            confirmer=confirmer,
+            long_task_threshold_s=long_task_threshold_s,
+            audit=audit,
         )
     _print_result(result)
     return 0 if result.ok else 1
+
+
+def _handle_autostart(args) -> int:
+    """Install or remove Windows autostart; always exits."""
+    from jarvis.autostart import (
+        install_autostart,
+        uninstall_autostart,
+    )
+
+    # Reuse the same disable rules as the main process (env + --no-audit).
+    audit = _make_audit(args)
+    if args.install_autostart and args.uninstall_autostart:
+        print("Use either --install-autostart or --uninstall-autostart.", file=sys.stderr)
+        return 2
+    try:
+        if args.install_autostart:
+            cmd = install_autostart()
+            if audit is not None:
+                audit.log("autostart_install", command=cmd)
+            print(f"JARVIS> autostart installed (starts with Windows):\n  {cmd}")
+            print(
+                "  Reboot demo: restart Windows, then speak a command — "
+                "no manual launch needed."
+            )
+            return 0
+        removed = uninstall_autostart()
+        if audit is not None:
+            audit.log("autostart_uninstall", removed=removed)
+        if removed:
+            print("JARVIS> autostart removed.")
+        else:
+            print("JARVIS> autostart was not registered.")
+        return 0
+    except OSError as exc:
+        print(f"JARVIS> autostart failed: {exc}", file=sys.stderr)
+        return 2
 
 
 def run_listen(
@@ -269,10 +411,21 @@ def run_listen(
     overlay=None,
     google=None,
     connectivity=None,
+    long_tasks=None,
+    confirmer=None,
     unload_stt_after: bool = False,
+    long_task_threshold_s: float | None = None,
+    audit=None,
 ) -> int:
     if announce:
         print("Listening… (speak a command; ends on silence)")
+    if confirmer is None:
+        confirmer = make_confirmer(
+            interactive=False,
+            overlay=overlay,
+            recorder=recorder,
+            transcriber=transcriber,
+        )
     try:
         if overlay is not None:
             from jarvis.overlay.lifecycle import listen_and_handle_with_overlay
@@ -285,7 +438,11 @@ def run_listen(
                 overlay=overlay,
                 google=google,
                 connectivity=connectivity,
+                long_tasks=long_tasks,
+                confirmer=confirmer,
                 unload_stt_after=unload_stt_after,
+                long_task_threshold_s=long_task_threshold_s,
+                audit=audit,
             )
         else:
             outcome = listen_and_handle(
@@ -295,7 +452,11 @@ def run_listen(
                 speaker=speaker,
                 google=google,
                 connectivity=connectivity,
+                long_tasks=long_tasks,
+                confirmer=confirmer,
                 unload_stt_after=unload_stt_after,
+                long_task_threshold_s=long_task_threshold_s,
+                audit=audit,
             )
     except RuntimeError as e:
         print(f"JARVIS> voice error: {e}", file=sys.stderr)
@@ -328,10 +489,14 @@ def run_daemon(
     overlay=None,
     google=None,
     connectivity=None,
+    long_tasks=None,
+    confirmer=None,
     max_cycles: int | None = None,
     frames_factory=None,
     hotkey_controller=None,
     announce: bool = True,
+    resident=None,
+    audit=None,
 ) -> int:
     """Continuous wake + hotkey loop. Returns 0 after clean stop / max_cycles."""
     from jarvis.wake.session import FrontDoorSession
@@ -343,7 +508,24 @@ def run_daemon(
             f"phrase={getattr(detector, 'phrase', '?')!r}  hotkey={hk}"
         )
         print("  Say the wake word or press the hotkey for each command. Ctrl+C to stop.")
+        if resident is not None:
+            print("  Tray: Pause (deaf) / Resume / Quit when the system tray icon is shown.")
         print()
+
+    if long_tasks is None:
+        long_tasks = LongTaskService(
+            threshold_s=config.long_task_threshold_s, audit=audit
+        )
+    elif audit is not None and getattr(long_tasks, "audit", None) is None:
+        long_tasks.audit = audit
+
+    if confirmer is None:
+        confirmer = make_confirmer(
+            interactive=False,
+            overlay=overlay,
+            recorder=recorder,
+            transcriber=transcriber,
+        )
 
     session = FrontDoorSession(
         detector=detector,
@@ -353,12 +535,17 @@ def run_daemon(
         speaker=speaker,
         overlay=overlay,
         google=google,
+        long_tasks=long_tasks,
+        confirmer=confirmer,
         hotkey=config.hotkey,
         enable_hotkey=config.enable_hotkey,
         frames_factory=frames_factory,
         hotkey_controller=hotkey_controller,
         connectivity=connectivity,
         unload_stt_after=config.unload_stt_between_commands,
+        long_task_threshold_s=config.long_task_threshold_s,
+        resident=resident,
+        audit=audit,
     )
 
     def on_cycle(cycle) -> None:
@@ -378,6 +565,16 @@ def run_daemon(
 
     session.on_cycle = on_cycle
 
+    if audit is not None:
+        try:
+            audit.log(
+                "daemon_started",
+                hotkey=config.hotkey if config.enable_hotkey else None,
+                detector=getattr(detector, "name", type(detector).__name__),
+            )
+        except Exception:
+            pass
+
     try:
         session.run(max_cycles=max_cycles)
     except KeyboardInterrupt:
@@ -387,6 +584,11 @@ def run_daemon(
         if hasattr(detector, "close"):
             try:
                 detector.close()
+            except Exception:
+                pass
+        if audit is not None:
+            try:
+                audit.log("daemon_stopped")
             except Exception:
                 pass
 
@@ -403,6 +605,8 @@ def run_repl(
     fake_stt: str | None,
     google=None,
     connectivity=None,
+    long_tasks=None,
+    audit=None,
 ) -> int:
     print(
         "JARVIS  "
@@ -423,6 +627,12 @@ def run_repl(
 
     # Lazy STT — only load whisper when the user actually listens.
     transcriber = None
+    if long_tasks is None:
+        long_tasks = LongTaskService(
+            threshold_s=config.long_task_threshold_s, audit=audit
+        )
+    elif audit is not None and getattr(long_tasks, "audit", None) is None:
+        long_tasks.audit = audit
 
     while True:
         try:
@@ -456,7 +666,10 @@ def run_repl(
                 transcriber=transcriber,
                 google=google,
                 connectivity=connectivity,
+                long_tasks=long_tasks,
                 unload_stt_after=config.unload_stt_between_commands,
+                long_task_threshold_s=config.long_task_threshold_s,
+                audit=audit,
             )
             continue
 
@@ -466,6 +679,10 @@ def run_repl(
             speaker=speaker,
             google=google,
             connectivity=connectivity,
+            long_tasks=long_tasks,
+            confirmer=make_confirmer(interactive=True),
+            long_task_threshold_s=config.long_task_threshold_s,
+            audit=audit,
         )
         _print_result(result)
 
@@ -477,6 +694,8 @@ def _print_result(result) -> None:
     flags = []
     if result.denied:
         flags.append("denied")
+    if result.error == "confirmation_declined":
+        flags.append("cancelled")
     if not result.ok:
         flags.append("failed")
     flag_s = f"  [{', '.join(flags)}]" if flags else ""
@@ -492,22 +711,37 @@ def _print_result(result) -> None:
         print(f"  session: {shown}")
 
 
-def _run_with_qt_overlay(work, *, hold_after_s: float = 0.8) -> int:
-    """Run *work(overlay)* on a worker thread while the Qt event loop paints."""
+def _run_with_qt_overlay(
+    work,
+    *,
+    hold_after_s: float = 0.8,
+    resident=None,
+    enable_tray: bool = False,
+    use_overlay: bool = True,
+) -> int:
+    """Run *work(overlay)* on a worker thread while the Qt event loop paints.
+
+    When *enable_tray* is True, shows a system tray icon bound to *resident*
+    (Pause / Resume / Quit). Quit from the tray stops the resident controller
+    and exits the Qt loop.
+    """
     try:
         from PySide6 import QtCore, QtWidgets
     except ImportError:
         print(
-            'JARVIS> overlay needs PySide6. Install with: py -3.13 -m pip install -e ".[ui]"',
+            'JARVIS> overlay/tray needs PySide6. Install with: py -3.13 -m pip install -e ".[ui]"',
             file=sys.stderr,
         )
         return 2
 
-    from jarvis.overlay.aurora import AuroraOverlay
-
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
-    overlay = AuroraOverlay()
+    overlay = None
+    if use_overlay:
+        from jarvis.overlay.aurora import AuroraOverlay
+
+        overlay = AuroraOverlay()
     result_box: dict[str, int] = {"code": 1}
+    tray = None
 
     class _Bridge(QtCore.QObject):
         finished = QtCore.Signal()
@@ -520,6 +754,22 @@ def _run_with_qt_overlay(work, *, hold_after_s: float = 0.8) -> int:
 
     bridge.finished.connect(_quit_soon)
 
+    def _tray_quit() -> None:
+        if resident is not None:
+            resident.quit()
+        app.quit()
+
+    if enable_tray and resident is not None:
+        try:
+            from jarvis.tray import JarvisTray
+
+            if not QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
+                print("JARVIS> system tray not available on this desktop", file=sys.stderr)
+            else:
+                tray = JarvisTray(resident, on_quit=_tray_quit)
+        except Exception as exc:  # noqa: BLE001 — tray is non-fatal
+            print(f"JARVIS> tray icon unavailable: {exc}", file=sys.stderr)
+
     def runner() -> None:
         try:
             result_box["code"] = int(work(overlay))
@@ -531,7 +781,13 @@ def _run_with_qt_overlay(work, *, hold_after_s: float = 0.8) -> int:
 
     threading.Thread(target=runner, daemon=True).start()
     app.exec()
-    overlay.close()
+    if tray is not None:
+        try:
+            tray.hide()
+        except Exception:
+            pass
+    if overlay is not None:
+        overlay.close()
     return result_box["code"]
 
 
@@ -550,9 +806,50 @@ def _want_overlay(args) -> bool:
     return False
 
 
+def _want_tray(args) -> bool:
+    if getattr(args, "no_tray", False):
+        return False
+    if not args.daemon:
+        return False
+    try:
+        import PySide6  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _make_audit(args):
+    """Build the process audit log, or None when disabled.
+
+    Disabled by ``--no-audit`` or env ``JARVIS_AUDIT=0`` (tests use the latter
+    via conftest so older CLI tests never write ``~/.jarvis/audit.log``).
+    """
+    import os
+
+    if getattr(args, "no_audit", False):
+        return None
+    env = os.environ.get("JARVIS_AUDIT", "1").strip().lower()
+    if env in ("0", "false", "no", "off"):
+        return None
+    from jarvis.audit import default_audit_log
+
+    return default_audit_log()
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    config = JarvisConfig.from_env()
+
+    if args.install_autostart or args.uninstall_autostart:
+        return _handle_autostart(args)
+
+    # Settings file (optional explicit path) then env/defaults.
+    if args.settings is not None:
+        from jarvis.settings import apply_user_settings, load_settings
+
+        config = JarvisConfig.from_env(apply_settings=False)
+        config = apply_user_settings(config, load_settings(args.settings))
+    else:
+        config = JarvisConfig.from_env()
     if args.model:
         config.claude_model = args.model
     if args.cwd:
@@ -593,12 +890,18 @@ def main(argv: list[str] | None = None) -> int:
     brain = make_brain(config, fake=args.fake)
     speaker = make_speaker(config, no_speak=args.no_speak)
     use_overlay = _want_overlay(args)
+    use_tray = _want_tray(args)
     # --fake enables sample Google data so demos work offline; real runs load
     # tokens via build_google_workspace when signed in. --no-google disables.
     use_fake_google = bool(args.fake_google or (args.fake and not args.no_google))
     google = make_google(fake_google=use_fake_google, no_google=args.no_google)
     # Fake brain needs no network; skip connectivity pre-check so offline demos work.
     connectivity = None if args.fake else make_connectivity(config)
+    audit = _make_audit(args)
+    # Shared across daemon cycles / REPL turns so "cancel" aborts in-flight work.
+    long_tasks = LongTaskService(
+        threshold_s=config.long_task_threshold_s, audit=audit
+    )
 
     if args.daemon:
         if args.once is not None or args.listen:
@@ -646,6 +949,10 @@ def main(argv: list[str] | None = None) -> int:
                 # (re-armed by detector.reset() at the start of each wait).
                 return (np.zeros(fl, dtype=np.int16) for _ in itertools.count())
 
+        from jarvis.resident import ResidentController
+
+        resident = ResidentController(audit=audit)
+
         def _daemon_work(overlay=None) -> int:
             return run_daemon(
                 config=config,
@@ -657,16 +964,22 @@ def main(argv: list[str] | None = None) -> int:
                 overlay=overlay,
                 google=google,
                 connectivity=connectivity,
+                long_tasks=long_tasks,
                 max_cycles=args.max_cycles,
                 frames_factory=frames_factory,
                 announce=True,
+                resident=resident,
+                audit=audit,
             )
 
-        if use_overlay:
-            # Daemon keeps running — hold_after only applies when work returns.
+        # Tray and/or overlay need a Qt app. Prefer that path when either is on.
+        if use_overlay or use_tray:
             return _run_with_qt_overlay(
                 lambda ov: _daemon_work(ov),
                 hold_after_s=0.3,
+                resident=resident,
+                enable_tray=use_tray,
+                use_overlay=use_overlay,
             )
         return _daemon_work(None)
 
@@ -692,7 +1005,10 @@ def main(argv: list[str] | None = None) -> int:
                     overlay=ov,
                     google=google,
                     connectivity=connectivity,
+                    long_tasks=long_tasks,
                     unload_stt_after=config.unload_stt_between_commands,
+                    long_task_threshold_s=config.long_task_threshold_s,
+                    audit=audit,
                 )
             )
         return run_listen(
@@ -703,7 +1019,10 @@ def main(argv: list[str] | None = None) -> int:
             announce=args.fake_stt is None,
             google=google,
             connectivity=connectivity,
+            long_tasks=long_tasks,
             unload_stt_after=config.unload_stt_between_commands,
+            long_task_threshold_s=config.long_task_threshold_s,
+            audit=audit,
         )
 
     if args.once is not None:
@@ -716,6 +1035,9 @@ def main(argv: list[str] | None = None) -> int:
                     overlay=ov,
                     google=google,
                     connectivity=connectivity,
+                    long_tasks=long_tasks,
+                    long_task_threshold_s=config.long_task_threshold_s,
+                    audit=audit,
                 )
             )
         return run_once(
@@ -724,6 +1046,9 @@ def main(argv: list[str] | None = None) -> int:
             speaker=speaker,
             google=google,
             connectivity=connectivity,
+            long_tasks=long_tasks,
+            long_task_threshold_s=config.long_task_threshold_s,
+            audit=audit,
         )
 
     if args.overlay and not args.daemon:
@@ -741,6 +1066,8 @@ def main(argv: list[str] | None = None) -> int:
         fake_stt=None,
         google=google,
         connectivity=connectivity,
+        long_tasks=long_tasks,
+        audit=audit,
     )
 
 

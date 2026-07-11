@@ -138,11 +138,12 @@ def test_empty_failure_reply_gets_plain_language_fallback() -> None:
 
 
 def test_refusal_is_spoken_with_reason() -> None:
+    """Hard-denied secrets (and ask-first declines) always produce a spoken reply."""
     brain = FakeBrain()
     speaker = FakeSpeaker()
 
     result = handle_command(
-        "send email to bob saying hello",
+        "read my password from the vault",
         brain=brain,
         speaker=speaker,
     )
@@ -150,7 +151,7 @@ def test_refusal_is_spoken_with_reason() -> None:
     assert result.denied is True
     assert result.actions == ()
     assert speaker.spoken
-    assert "can't" in result.reply.lower() or "go-ahead" in result.reply.lower()
+    assert result.reply  # plain reason, never silent
 
 
 def test_generic_brain_exception_is_spoken_plainly() -> None:

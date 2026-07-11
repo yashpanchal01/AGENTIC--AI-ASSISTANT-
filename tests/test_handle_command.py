@@ -47,6 +47,7 @@ def test_safe_tier_action_is_reported_and_spoken() -> None:
 
 
 def test_risky_action_does_not_auto_run() -> None:
+    """Risky actions never auto-run without an explicit yes (issue 06)."""
     brain = FakeBrain()
     speaker = FakeSpeaker()
 
@@ -56,10 +57,10 @@ def test_risky_action_does_not_auto_run() -> None:
         speaker=speaker,
     )
 
-    assert result.denied is True
+    # No confirmer → safe decline; zero actions executed.
     assert result.actions == ()
-    assert "can't" in result.reply.lower() or "go-ahead" in result.reply.lower()
-    assert speaker.spoken  # still speaks the refusal
+    assert result.error == "confirmation_declined"
+    assert speaker.spoken  # still speaks the ask + cancel
 
 
 def test_secrets_are_never_touched() -> None:

@@ -10,6 +10,7 @@ import numpy as np
 
 from jarvis.audio.capture import MicRecorder
 from jarvis.audio.silence import SilenceConfig
+from jarvis.audit import MemoryAuditLog
 from jarvis.brain.fake import FakeBrain
 from jarvis.overlay.fake import FakeOverlay
 from jarvis.overlay.lifecycle import (
@@ -27,6 +28,7 @@ def test_state_titles_cover_lifecycle() -> None:
     assert STATE_TITLE[OverlayState.HEARD] == "Heard"
     assert "Working" in STATE_TITLE[OverlayState.WORKING]
     assert STATE_TITLE[OverlayState.SPEAKING] == "Speaking"
+    assert STATE_TITLE[OverlayState.CONFIRM] == "Confirm?"
 
 
 def test_handle_command_drives_heard_working_speaking_rest() -> None:
@@ -102,6 +104,7 @@ def test_listen_no_speech_returns_to_rest_and_speaks() -> None:
     speaker = FakeSpeaker()
     overlay = FakeOverlay()
     stt = FakeTranscriber(text="should not run")
+    audit = MemoryAuditLog()
     sr = 16_000
     quiet = [np.zeros(sr, dtype=np.float32)]
     rec = MicRecorder(
@@ -117,6 +120,7 @@ def test_listen_no_speech_returns_to_rest_and_speaks() -> None:
         overlay=overlay,
         heard_dwell_s=0,
         speaking_min_s=0,
+        audit=audit,
     )
 
     assert not outcome.ok
@@ -125,6 +129,10 @@ def test_listen_no_speech_returns_to_rest_and_speaks() -> None:
     assert OverlayState.ARMED in overlay.states
     assert OverlayState.HEARD not in overlay.states
     assert overlay.states[-1] is OverlayState.REST
+    # Parity with non-overlay listen_and_handle (issue 11 review nit).
+    err_events = [e for e in audit.events if e["event"] == "transcript_error"]
+    assert len(err_events) == 1
+    assert err_events[0]["error"] == "no_speech"
 
 
 def test_listen_empty_transcript_returns_to_rest_without_heard() -> None:
@@ -132,6 +140,7 @@ def test_listen_empty_transcript_returns_to_rest_without_heard() -> None:
     speaker = FakeSpeaker()
     overlay = FakeOverlay()
     stt = FakeTranscriber(text="")
+    audit = MemoryAuditLog()
     sr = 16_000
     speech = np.full(int(sr * 0.5), 0.2, dtype=np.float32)
     quiet = np.zeros(int(sr * 1.0), dtype=np.float32)
@@ -148,6 +157,7 @@ def test_listen_empty_transcript_returns_to_rest_without_heard() -> None:
         overlay=overlay,
         heard_dwell_s=0,
         speaking_min_s=0,
+        audit=audit,
     )
 
     assert not outcome.ok
@@ -157,3 +167,6 @@ def test_listen_empty_transcript_returns_to_rest_without_heard() -> None:
     assert OverlayState.WORKING in overlay.states  # STT phase
     assert OverlayState.HEARD not in overlay.states
     assert overlay.states[-1] is OverlayState.REST
+    err_events = [e for e in audit.events if e["event"] == "transcript_error"]
+    assert len(err_events) == 1
+    assert err_events[0]["error"] == "empty_transcript"

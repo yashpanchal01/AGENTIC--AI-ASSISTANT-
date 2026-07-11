@@ -7,7 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 # Safe-tier tools: auto-run with zero prompts (prototype-validated list).
-# Destructive/outward tools are simply omitted → denied, never prompted.
+# Ask-first tier (issue 06) is enforced in core/brain before tools run for
+# destructive/system/outward commands; secrets stay hard-denied always.
 DEFAULT_SAFE_TOOLS: tuple[str, ...] = (
     "Bash",
     "Read",
@@ -27,6 +28,9 @@ JARVIS_SYSTEM_PROMPT = (
     "user's approved folders are pre-approved. "
     "If a shell command is blocked by the sandbox, retry it with the sandbox disabled. "
     "Never read, store, or speak passwords, API keys, or credentials. "
+    "Destructive, system-level, or out-of-folder actions are gated by JARVIS itself "
+    "before this prompt — if you are asked to perform one, the user already said "
+    "yes; proceed with the action. "
     "Gmail and Calendar are handled by JARVIS itself (read-only); do not send, "
     "reply, forward email or create calendar events. "
     "When something fails (file not found, app missing, tool error), explain in "
@@ -118,9 +122,17 @@ class JarvisConfig:
     check_connectivity: bool = True
     # Free Whisper VRAM between commands so games can coexist (JARVIS_UNLOAD_STT=1).
     unload_stt_between_commands: bool = False
+    # Long tasks (issue 10): background brain turns that exceed this many seconds.
+    long_task_threshold_s: float = 20.0
 
     @classmethod
-    def from_env(cls) -> JarvisConfig:
+    def from_env(cls, *, apply_settings: bool = True) -> JarvisConfig:
+        """Build config from defaults + environment, then user settings file.
+
+        Order: dataclass defaults → env vars → ``~/.jarvis/settings.json``
+        (hotkey, approved_folders, voice). Pass ``apply_settings=False`` to
+        skip the settings file (tests / explicit CLI-only paths).
+        """
         model = os.environ.get("JARVIS_MODEL", "sonnet")
         speak = os.environ.get("JARVIS_SPEAK", "1") not in ("0", "false", "no")
         device = os.environ.get("JARVIS_WHISPER_DEVICE", "cuda")
@@ -152,7 +164,11 @@ class JarvisConfig:
             "true",
             "yes",
         )
-        return cls(
+        try:
+            long_thresh = float(os.environ.get("JARVIS_LONG_TASK_S", "20"))
+        except ValueError:
+            long_thresh = 20.0
+        cfg = cls(
             claude_model=model,
             speak=speak,
             whisper_device=device,
@@ -166,4 +182,10 @@ class JarvisConfig:
             google_token_path=Path(token) if token else None,
             check_connectivity=check_net,
             unload_stt_between_commands=unload_stt,
+            long_task_threshold_s=long_thresh,
         )
+        if apply_settings:
+            from jarvis.settings import apply_user_settings, load_settings_for_config
+
+            cfg = apply_user_settings(cfg, load_settings_for_config())
+        return cfg

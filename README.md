@@ -84,6 +84,38 @@ py -3.13 -m jarvis --fake --no-speak --no-hotkey --daemon
 py -3.13 -m jarvis --fake --no-speak --no-hotkey --fake-wake --fake-stt "open notepad" --daemon --max-cycles 1 --no-overlay
 ```
 
+### Live-in polish (autostart, tray, settings, audit)
+
+JARVIS can run as a resident: starts with Windows, system tray Pause/Resume/Quit,
+user settings file, and an append-only audit log.
+
+```powershell
+# Register --daemon to start with Windows (HKCU Run key "JARVIS")
+py -3.13 -m jarvis --install-autostart
+# Reboot demo: restart PC, then speak a command — nothing to launch by hand.
+py -3.13 -m jarvis --uninstall-autostart
+
+# Daemon with tray (default when PySide6 is installed) + Aurora overlay
+py -3.13 -m jarvis --daemon
+# Pause from the tray makes wake word + hotkey do nothing until Resume; Quit stops fully.
+```
+
+**Settings** (`%USERPROFILE%\.jarvis\settings.json`, or `JARVIS_SETTINGS` / `--settings`):
+
+```json
+{
+  "hotkey": "ctrl+shift+j",
+  "approved_folders": ["C:\\Users\\You\\Documents", "C:\\Users\\You\\Downloads"],
+  "voice": "C:\\Users\\You\\Downloads\\en_GB-northern_english_male-medium.onnx"
+}
+```
+
+Edit the file and restart the daemon (or reboot if autostart is on) — no code changes.
+
+**Audit log** (`%USERPROFILE%\.jarvis\audit.log`): JSON-lines with timestamps for
+wake/hotkey arm, transcripts, command results, pause/resume/quit, autostart.
+Disable for a run with `--no-audit`.
+
 Wake styles:
 
 - **One-breath:** “Jarvis, open notepad” — command rides in the same utterance; leading wake phrase is stripped from the transcript.
@@ -162,6 +194,8 @@ py -3.13 -m jarvis --demo-overlay
 | `JARVIS_GOOGLE_CLIENT_SECRETS` | Path to Google OAuth Desktop client JSON |
 | `JARVIS_GOOGLE_TOKEN` | Override path for stored OAuth tokens |
 | `JARVIS_MEMORY_DIR` | Markdown memory root (tokens are *never* stored here) |
+| `JARVIS_HOME` | Root for settings + audit log (default `%USERPROFILE%\.jarvis`) |
+| `JARVIS_SETTINGS` | Override path to `settings.json` |
 
 ### Graceful degradation (GitHub #9)
 
@@ -207,7 +241,9 @@ model** — raw text goes straight to the brain.
   `PICOVOICE_ACCESS_KEY` is set; otherwise openWakeWord `hey jarvis`.
   See `benches/wake_word_ab/DECISION.md`.
 - **Tiered autonomy:** safe tools auto-run via Claude `--allowedTools` +
-  `--permission-mode acceptEdits`. Risky tools are omitted from the allow-list.
+  `--permission-mode acceptEdits`. Destructive / system / outward commands hit
+  an ask-first gate (voice yes/no + overlay Yes/No); secrets stay hard-denied.
+  Post-confirm execution is foreground in v1 (no second long-task "On it." race).
 - **Automated seam:** `FakeBrain` + `FakeSpeaker` + `FakeTranscriber` +
   `FakeWakeDetector` + `FakeOverlay`. No real mic in CI.
 

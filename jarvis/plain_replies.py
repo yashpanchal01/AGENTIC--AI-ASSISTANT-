@@ -17,6 +17,12 @@ BRAIN_EXCEPTION = "Something went wrong talking to my brain."
 STT_FAILED = "I couldn't transcribe that."
 TIMEOUT = "That took too long and I had to stop."
 CLAUDE_NOT_FOUND = "I can't reach my brain — Claude CLI is not installed."
+# Long-running tasks (issue 10 / PRD stories 44–45)
+ON_IT = "On it."
+CANCELLED = "Cancelled."
+NOTHING_TO_CANCEL = "Nothing to cancel."
+STILL_WORKING = "I'm still working on that. Say cancel to stop."
+ALREADY_FINISHED = "That already finished."
 
 _ERROR_REPLIES: dict[str, str] = {
     "brain_unreachable": BRAIN_UNREACHABLE,
@@ -25,6 +31,7 @@ _ERROR_REPLIES: dict[str, str] = {
     "stt_failed": STT_FAILED,
     "timeout": TIMEOUT,
     "claude_not_found": CLAUDE_NOT_FOUND,
+    "cancelled": CANCELLED,
     "tool_failed": GENERIC_FAILURE,
     "not_found": "I couldn't find that.",
 }

@@ -24,11 +24,12 @@ from jarvis.overlay.states import OverlayState
 from jarvis.plain_replies import plain_error_reply
 from jarvis.stt.base import Transcriber
 from jarvis.tts.base import Speaker
-from jarvis.voice import ListenResult, _maybe_unload_stt
+from jarvis.voice import ListenResult, _maybe_unload_stt, confirmer_may_use_stt
 from jarvis.wake.phrases import DEFAULT_WAKE_PHRASES, strip_wake_phrase
 
 if TYPE_CHECKING:
     from jarvis.connectivity import Connectivity
+    from jarvis.tasks import LongTaskService
 
 TriggerSource = Literal["wake", "hotkey"]
 
@@ -94,6 +95,15 @@ def _arm(overlay: Overlay | None) -> None:
         overlay.set_state(OverlayState.ARMED, level=_ARMED_LEVEL)
 
 
+def _audit(audit, event: str, **details) -> None:
+    if audit is None:
+        return
+    try:
+        audit.log(event, **details)
+    except Exception:
+        pass
+
+
 def run_armed_pipeline(
     *,
     recorder: MicRecorder,
@@ -103,6 +113,8 @@ def run_armed_pipeline(
     source: TriggerSource,
     overlay: Overlay | None = None,
     google=None,
+    long_tasks: LongTaskService | None = None,
+    confirmer=None,
     wake_phrases: tuple[str, ...] = DEFAULT_WAKE_PHRASES,
     on_two_step_ready: Callable[[], None] | None = None,
     acknowledge_text: str | None = "Yes?",
@@ -110,6 +122,8 @@ def run_armed_pipeline(
     unload_stt_after: bool = False,
     heard_dwell_s: float = DEFAULT_HEARD_DWELL_S,
     speaking_min_s: float = DEFAULT_SPEAKING_MIN_S,
+    long_task_threshold_s: float | None = None,
+    audit=None,
 ) -> ListenResult:
     """Single command after arming (wake or hotkey). Shared entry point.
 
@@ -118,9 +132,24 @@ def run_armed_pipeline(
     Hotkey: no wake stripping; one record → STT → handle_command.
 
     Local failures are spoken in plain language (SPEAKING chrome when overlay is on).
-    Overlay always returns to REST. ARMED is only held while the mic is recording.
+    Overlay returns to REST after each command unless a long task was backgrounded
+    (or a busy refusal left work in flight) — then it stays WORKING until the
+    long-task service announces completion, failure, or cancel. ARMED is only
+    held while the mic is recording.
     """
     _arm(overlay)
+
+    # Default confirmer early so we know whether to keep STT through confirm.
+    if confirmer is None:
+        from jarvis.confirm import VoiceOrClickConfirmer
+
+        confirmer = VoiceOrClickConfirmer(
+            overlay=overlay,
+            recorder=recorder,
+            transcriber=transcriber,
+        )
+    defer_unload = bool(unload_stt_after and confirmer_may_use_stt(confirmer))
+    unload_now = bool(unload_stt_after and not defer_unload)
 
     rest_owned_by_handler = False
     try:
@@ -130,12 +159,14 @@ def run_armed_pipeline(
             overlay.set_state(OverlayState.WORKING)
 
         raw, err = _transcribe_record(
-            record, transcriber, unload_stt_after=unload_stt_after
+            record, transcriber, unload_stt_after=unload_now
         )
         if err:
+            _maybe_unload_stt(transcriber, unload=defer_unload)
             _speak_local_error(
                 speaker, err, overlay=overlay, speaking_min_s=speaking_min_s
             )
+            _audit(audit, "transcript_error", source=source, error=err)
             return ListenResult(
                 transcript=raw,
                 command=None,
@@ -169,12 +200,14 @@ def run_armed_pipeline(
                     overlay.set_state(OverlayState.WORKING)
 
                 raw2, err2 = _transcribe_record(
-                    record, transcriber, unload_stt_after=unload_stt_after
+                    record, transcriber, unload_stt_after=unload_now
                 )
                 if err2:
+                    _maybe_unload_stt(transcriber, unload=defer_unload)
                     _speak_local_error(
                         speaker, err2, overlay=overlay, speaking_min_s=speaking_min_s
                     )
+                    _audit(audit, "transcript_error", source=source, error=err2)
                     return ListenResult(
                         transcript=raw2,
                         command=None,
@@ -185,12 +218,14 @@ def run_armed_pipeline(
                 raw = raw2
 
         if not command_text.strip():
+            _maybe_unload_stt(transcriber, unload=defer_unload)
             _speak_local_error(
                 speaker,
                 "empty_transcript",
                 overlay=overlay,
                 speaking_min_s=speaking_min_s,
             )
+            _audit(audit, "transcript_error", source=source, error="empty_transcript")
             return ListenResult(
                 transcript=raw,
                 command=None,
@@ -198,28 +233,41 @@ def run_armed_pipeline(
                 error="empty_transcript",
             )
 
-        if overlay is not None:
-            from jarvis.overlay.lifecycle import handle_command_with_overlay
+        _audit(audit, "transcript_received", source=source, transcript=command_text)
 
-            rest_owned_by_handler = True
-            result = handle_command_with_overlay(
-                command_text,
-                brain=brain,
-                speaker=speaker,
-                overlay=overlay,
-                google=google,
-                connectivity=connectivity,
-                heard_dwell_s=heard_dwell_s,
-                speaking_min_s=speaking_min_s,
-            )
-        else:
-            result = handle_command(
-                command_text,
-                brain=brain,
-                speaker=speaker,
-                google=google,
-                connectivity=connectivity,
-            )
+        try:
+            if overlay is not None:
+                from jarvis.overlay.lifecycle import handle_command_with_overlay
+
+                rest_owned_by_handler = True
+                result = handle_command_with_overlay(
+                    command_text,
+                    brain=brain,
+                    speaker=speaker,
+                    overlay=overlay,
+                    google=google,
+                    connectivity=connectivity,
+                    long_tasks=long_tasks,
+                    confirmer=confirmer,
+                    heard_dwell_s=heard_dwell_s,
+                    speaking_min_s=speaking_min_s,
+                    long_task_threshold_s=long_task_threshold_s,
+                    audit=audit,
+                )
+            else:
+                result = handle_command(
+                    command_text,
+                    brain=brain,
+                    speaker=speaker,
+                    google=google,
+                    connectivity=connectivity,
+                    long_tasks=long_tasks,
+                    confirmer=confirmer,
+                    long_task_threshold_s=long_task_threshold_s,
+                    audit=audit,
+                )
+        finally:
+            _maybe_unload_stt(transcriber, unload=defer_unload)
 
         return ListenResult(
             transcript=command_text,
