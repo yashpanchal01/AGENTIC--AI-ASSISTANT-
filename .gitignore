@@ -1,2 +1,8 @@
 jarvis-proto/multi-test/
 node_modules/
+__pycache__/
+*.py[cod]
+.venv/
+benches/wake_word_ab/results/
+.env
+*.log

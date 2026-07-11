@@ -1,0 +1,7 @@
+# Wake-word A/B bench (issue 01). Install with:
+#   py -3.13 -m pip install -r benches/wake_word_ab/requirements.txt
+openwakeword>=0.6.0
+onnxruntime>=1.16.0
+pvporcupine>=3.0.0
+sounddevice>=0.4.6
+numpy>=1.24
