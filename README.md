@@ -163,6 +163,42 @@ py -3.13 -m jarvis --fake --no-speak --once "send an email to bob"   # declined
 py -3.13 -m jarvis --no-speak --once "any new email?"
 ```
 
+### Markdown long-term memory
+
+"Jarvis, remember that …" persists facts **across sessions and reboots** as
+plain, human-editable markdown notes — one dated, tagged, summarized file per
+fact under `%USERPROFILE%\.jarvis\memory` (override with `JARVIS_MEMORY_DIR`).
+Open, edit, or delete the files yourself; JARVIS keeps up. Passwords, API
+keys, and credentials are **never** written to memory notes (spoken refusal).
+
+```powershell
+py -3.13 -m jarvis --fake --no-speak --once "remember that the wifi network is called skynet"
+# Restart later — the fact is still there:
+py -3.13 -m jarvis --fake --no-speak --once "what do you remember about the wifi?"
+py -3.13 -m jarvis --fake --no-speak --once "what do you remember?"        # list notes
+py -3.13 -m jarvis --fake --no-speak --once "forget about the wifi network" # correction
+py -3.13 -m jarvis --fake --no-speak --once "remember that my password is x" # refused
+```
+
+A note file looks like:
+
+```markdown
+# The wifi network is called skynet
+
+- Date: 2026-07-12 09:30
+- Tags: wifi, network, called, skynet
+- Source: voice
+
+the wifi network is called skynet
+```
+
+Remember / recall / forget are answered locally (instant, works offline). For
+everything else, a compact digest of the notes rides in the cloud brain's
+system prompt, so a later session can use a remembered fact without you
+repeating it. Disable for a run with `--no-memory`. Within a session,
+short-term context stays in the persistent brain conversation — markdown is
+for facts that must outlive sessions.
+
 ### Aurora overlay
 
 Native PySide6 pill (not Electron/web). States: **armed → heard → working → speaking** (+ rest hides). Does not steal keyboard focus.
@@ -202,7 +238,7 @@ py -3.13 -m jarvis --demo-overlay
 | `PICOVOICE_ACCESS_KEY` | Free Picovoice key → prefer Porcupine (`jarvis`) |
 | `JARVIS_GOOGLE_CLIENT_SECRETS` | Path to Google OAuth Desktop client JSON |
 | `JARVIS_GOOGLE_TOKEN` | Override path for stored OAuth tokens |
-| `JARVIS_MEMORY_DIR` | Markdown memory root (tokens are *never* stored here) |
+| `JARVIS_MEMORY_DIR` | Markdown memory root (default `~/.jarvis/memory`; tokens are *never* stored here) |
 | `JARVIS_HOME` | Root for settings + audit log (default `%USERPROFILE%\.jarvis`) |
 | `JARVIS_SETTINGS` | Override path to `settings.json` |
 
@@ -253,6 +289,12 @@ model** — raw text goes straight to the brain.
   `--permission-mode acceptEdits`. Destructive / system / outward commands hit
   an ask-first gate (voice yes/no + overlay Yes/No); secrets stay hard-denied.
   Post-confirm execution is foreground in v1 (no second long-task "On it." race).
+- **Markdown memory (issue 07):** remember / recall / forget intents are
+  answered locally from dated+tagged notes under `~/.jarvis/memory`
+  (before Google and the brain; works offline). A digest of the notes is
+  appended to the cloud brain's system prompt so remembered facts survive
+  new sessions. Secrets are never written to notes; Google tokens are
+  hard-guarded out of the memory tree.
 - **Automated seam:** `FakeBrain` + `FakeSpeaker` + `FakeTranscriber` +
   `FakeWakeDetector` + `FakeOverlay`. No real mic in CI.
 

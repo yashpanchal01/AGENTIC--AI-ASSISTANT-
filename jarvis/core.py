@@ -38,6 +38,17 @@ class GoogleHandler(Protocol):
     def try_handle(self, utterance: str) -> object | None: ...
 
 
+@runtime_checkable
+class MemoryHandler(Protocol):
+    """Optional markdown long-term memory seam (issue 07).
+
+    try_handle returns an object with reply/actions/denied/ok/error fields, or
+    None to fall through to Google / the brain.
+    """
+
+    def try_handle(self, utterance: str) -> object | None: ...
+
+
 @dataclass(frozen=True)
 class CommandResult:
     """Observable outcome of one handle_command call."""
@@ -58,6 +69,7 @@ def handle_command(
     brain: Brain,
     speaker: Speaker,
     google: GoogleHandler | None = None,
+    memory: MemoryHandler | None = None,
     connectivity: Connectivity | None = None,
     long_tasks: LongTaskService | None = None,
     overlay: Overlay | None = None,
@@ -66,10 +78,15 @@ def handle_command(
     long_task_threshold_s: float | None = None,
     audit: Any = None,
 ) -> CommandResult:
-    """Run one command through Google (if matched) or the brain, then speak.
+    """Run one command through memory / Google (if matched) or the brain, then speak.
 
     Automated test seam (PRD): inject FakeBrain + optional sample_workspace and
     assert on reply text + actions taken.
+
+    Markdown memory (issue 07): when *memory* is provided, "remember that …" /
+    "what do you remember …" / "forget …" are answered locally from plain
+    markdown notes — before Google and the brain, and even while offline.
+    Secrets are never written to memory notes (spoken refusal, ``denied=True``).
 
     Failures are always spoken in plain language (never silent, never a stack
     trace). When *connectivity* reports offline, the cloud brain is not called
@@ -79,7 +96,7 @@ def handle_command(
     When *long_tasks* is provided, brain turns that exceed the long-task
     threshold are backgrounded with a spoken "On it." acknowledgment (issue 10).
     Cancel utterances abort the in-flight task. Short/fast turns stay on the
-    normal foreground path. Google handling is always foreground.
+    normal foreground path. Memory and Google handling are always foreground.
 
     Ask-first (issue 06): when the brain returns ``needs_confirmation``, the
     overlay previews the proposed action and *confirmer* supplies yes/no
@@ -137,6 +154,27 @@ def handle_command(
             _audit_result(audit, result, path="long_task")
             return result
 
+    # Markdown long-term memory (issue 07): local notes answer before Google
+    # and the brain, and independently of the network.
+    if memory is not None:
+        try:
+            m_result = memory.try_handle(text)
+        except Exception as exc:  # noqa: BLE001 — boundary: never crash the REPL
+            reply = "Something went wrong with my memory notes."
+            speaker.speak(reply)
+            result = CommandResult(
+                reply=reply,
+                actions=(),
+                ok=False,
+                error=type(exc).__name__,
+            )
+            _audit_result(audit, result, path="memory")
+            return result
+        if m_result is not None:
+            result = _finish_handler(m_result, speaker=speaker)
+            _audit_result(audit, result, path="memory")
+            return result
+
     offline = connectivity is not None and not connectivity.is_online()
 
     # Gmail/Calendar before the brain. Live Google needs the network; when
@@ -174,7 +212,7 @@ def handle_command(
                         _audit_result(audit, result, path="google")
                         return result
                     if g_result is not None:
-                        result = _finish_google(g_result, speaker=speaker)
+                        result = _finish_handler(g_result, speaker=speaker)
                         _audit_result(audit, result, path="google")
                         return result
                 else:
@@ -206,7 +244,7 @@ def handle_command(
                 _audit_result(audit, result, path="google")
                 return result
             if g_result is not None:
-                result = _finish_google(g_result, speaker=speaker)
+                result = _finish_handler(g_result, speaker=speaker)
                 _audit_result(audit, result, path="google")
                 return result
 
@@ -491,7 +529,7 @@ def _audit_result(audit: Any, result: CommandResult, *, path: str) -> None:
     )
 
 
-def _finish_google(result: object, *, speaker: Speaker) -> CommandResult:
+def _finish_handler(result: object, *, speaker: Speaker) -> CommandResult:
     reply = (getattr(result, "reply", None) or "").strip()
     error = getattr(result, "error", None)
     ok = bool(getattr(result, "ok", True))

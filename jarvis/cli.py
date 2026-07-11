@@ -164,6 +164,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable Gmail/Calendar integration for this run",
     )
     p.add_argument(
+        "--no-memory",
+        action="store_true",
+        help="Disable markdown long-term memory for this run",
+    )
+    p.add_argument(
         "--install-autostart",
         action="store_true",
         help="Register JARVIS --daemon to start with Windows (HKCU Run key), then exit",
@@ -262,6 +267,15 @@ def make_google(*, fake_google: bool, no_google: bool):
     return build_google_workspace(force_fake=fake_google)
 
 
+def make_memory(config: JarvisConfig, *, no_memory: bool = False):
+    """Markdown long-term memory handler (issue 07), or None when disabled."""
+    if no_memory:
+        return None
+    from jarvis.memory.handler import build_memory_handler
+
+    return build_memory_handler(config.memory_dir)
+
+
 def make_connectivity(config: JarvisConfig):
     """Real socket check when enabled; None skips the pre-check (tests / offline demos)."""
     if not config.check_connectivity:
@@ -338,6 +352,7 @@ def run_once(
     speaker,
     overlay=None,
     google=None,
+    memory=None,
     connectivity=None,
     long_tasks=None,
     confirmer=None,
@@ -355,6 +370,7 @@ def run_once(
             speaker=speaker,
             overlay=overlay,
             google=google,
+            memory=memory,
             connectivity=connectivity,
             long_tasks=long_tasks,
             confirmer=confirmer,
@@ -367,6 +383,7 @@ def run_once(
             brain=brain,
             speaker=speaker,
             google=google,
+            memory=memory,
             connectivity=connectivity,
             long_tasks=long_tasks,
             confirmer=confirmer,
@@ -422,6 +439,7 @@ def run_listen(
     announce: bool = True,
     overlay=None,
     google=None,
+    memory=None,
     connectivity=None,
     long_tasks=None,
     confirmer=None,
@@ -449,6 +467,7 @@ def run_listen(
                 speaker=speaker,
                 overlay=overlay,
                 google=google,
+                memory=memory,
                 connectivity=connectivity,
                 long_tasks=long_tasks,
                 confirmer=confirmer,
@@ -463,6 +482,7 @@ def run_listen(
                 brain=brain,
                 speaker=speaker,
                 google=google,
+                memory=memory,
                 connectivity=connectivity,
                 long_tasks=long_tasks,
                 confirmer=confirmer,
@@ -500,6 +520,7 @@ def run_daemon(
     detector,
     overlay=None,
     google=None,
+    memory=None,
     connectivity=None,
     long_tasks=None,
     confirmer=None,
@@ -547,6 +568,7 @@ def run_daemon(
         speaker=speaker,
         overlay=overlay,
         google=google,
+        memory=memory,
         long_tasks=long_tasks,
         confirmer=confirmer,
         hotkey=config.hotkey,
@@ -616,6 +638,7 @@ def run_repl(
     config: JarvisConfig,
     fake_stt: str | None,
     google=None,
+    memory=None,
     connectivity=None,
     long_tasks=None,
     audit=None,
@@ -638,6 +661,11 @@ def run_repl(
               f"({type(google).__name__})")
     else:
         print("  google: off")
+    if memory is not None:
+        root = getattr(getattr(memory, "store", None), "root", None)
+        print(f"  memory: {root if root is not None else 'on'}")
+    else:
+        print("  memory: off")
     print()
 
     # Lazy STT — only load whisper when the user actually listens.
@@ -680,6 +708,7 @@ def run_repl(
                 recorder=recorder,
                 transcriber=transcriber,
                 google=google,
+                memory=memory,
                 connectivity=connectivity,
                 long_tasks=long_tasks,
                 unload_stt_after=config.unload_stt_between_commands,
@@ -693,6 +722,7 @@ def run_repl(
             brain=brain,
             speaker=speaker,
             google=google,
+            memory=memory,
             connectivity=connectivity,
             long_tasks=long_tasks,
             confirmer=make_confirmer(interactive=True),
@@ -920,6 +950,8 @@ def main(argv: list[str] | None = None) -> int:
     use_fake = config.brain_provider == "fake" or args.fake
     use_fake_google = bool(args.fake_google or (use_fake and not args.no_google))
     google = make_google(fake_google=use_fake_google, no_google=args.no_google)
+    # Markdown long-term memory is local and works with every brain (incl. fake).
+    memory = make_memory(config, no_memory=args.no_memory)
     # Fake brain needs no network; skip connectivity pre-check so offline demos work.
     connectivity = None if use_fake else make_connectivity(config)
     audit = _make_audit(args)
@@ -988,6 +1020,7 @@ def main(argv: list[str] | None = None) -> int:
                 detector=detector,
                 overlay=overlay,
                 google=google,
+                memory=memory,
                 connectivity=connectivity,
                 long_tasks=long_tasks,
                 max_cycles=args.max_cycles,
@@ -1029,6 +1062,7 @@ def main(argv: list[str] | None = None) -> int:
                     announce=args.fake_stt is None,
                     overlay=ov,
                     google=google,
+                    memory=memory,
                     connectivity=connectivity,
                     long_tasks=long_tasks,
                     unload_stt_after=config.unload_stt_between_commands,
@@ -1043,6 +1077,7 @@ def main(argv: list[str] | None = None) -> int:
             transcriber=transcriber,
             announce=args.fake_stt is None,
             google=google,
+            memory=memory,
             connectivity=connectivity,
             long_tasks=long_tasks,
             unload_stt_after=config.unload_stt_between_commands,
@@ -1059,6 +1094,7 @@ def main(argv: list[str] | None = None) -> int:
                     speaker=speaker,
                     overlay=ov,
                     google=google,
+                    memory=memory,
                     connectivity=connectivity,
                     long_tasks=long_tasks,
                     long_task_threshold_s=config.long_task_threshold_s,
@@ -1070,6 +1106,7 @@ def main(argv: list[str] | None = None) -> int:
             brain=brain,
             speaker=speaker,
             google=google,
+            memory=memory,
             connectivity=connectivity,
             long_tasks=long_tasks,
             long_task_threshold_s=config.long_task_threshold_s,
@@ -1090,6 +1127,7 @@ def main(argv: list[str] | None = None) -> int:
         config=config,
         fake_stt=None,
         google=google,
+        memory=memory,
         connectivity=connectivity,
         long_tasks=long_tasks,
         audit=audit,

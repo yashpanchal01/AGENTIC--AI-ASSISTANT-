@@ -11,12 +11,12 @@ from typing import Any
 def memory_notes_dir() -> Path:
     """Directory reserved for human-editable long-term memory (issue 07).
 
-    Tokens must never live here or under it.
+    Tokens must never live here or under it. Delegates to the memory store's
+    canonical default so both features agree on the tree to guard.
     """
-    env = os.environ.get("JARVIS_MEMORY_DIR")
-    if env:
-        return Path(env).expanduser().resolve()
-    return (Path.home() / ".jarvis" / "memory").resolve()
+    from jarvis.memory.store import default_memory_dir
+
+    return default_memory_dir()
 
 
 def default_token_path() -> Path:

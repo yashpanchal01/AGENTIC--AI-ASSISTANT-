@@ -132,6 +132,9 @@ class JarvisConfig:
     # Google OAuth (issue 7) — paths only; tokens never under memory notes
     google_client_secrets: Path | None = None
     google_token_path: Path | None = None
+    # Markdown long-term memory (issue 07) — None → JARVIS_MEMORY_DIR or
+    # ~/.jarvis/memory (see jarvis.memory.store.default_memory_dir).
+    memory_dir: Path | None = None
     # Graceful degradation (issue 9)
     # Pre-check internet before calling the cloud brain (skip with JARVIS_CHECK_NET=0).
     check_connectivity: bool = True
@@ -174,6 +177,7 @@ class JarvisConfig:
         pico = os.environ.get("PICOVOICE_ACCESS_KEY") or None
         secrets = os.environ.get("JARVIS_GOOGLE_CLIENT_SECRETS")
         token = os.environ.get("JARVIS_GOOGLE_TOKEN")
+        memory_env = os.environ.get("JARVIS_MEMORY_DIR")
         check_net = os.environ.get("JARVIS_CHECK_NET", "1") not in (
             "0",
             "false",
@@ -203,6 +207,7 @@ class JarvisConfig:
             picovoice_access_key=pico,
             google_client_secrets=Path(secrets) if secrets else None,
             google_token_path=Path(token) if token else None,
+            memory_dir=Path(memory_env) if memory_env else None,
             check_connectivity=check_net,
             unload_stt_between_commands=unload_stt,
             long_task_threshold_s=long_thresh,

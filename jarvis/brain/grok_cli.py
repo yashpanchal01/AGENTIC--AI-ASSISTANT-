@@ -258,6 +258,13 @@ class GrokCliBrain:
                 "Never run destructive shell commands (delete system paths, format, "
                 "shutdown, registry edits, privilege escalation)."
             )
+        # Markdown memory digest (issue 07): remembered facts ride in the
+        # system prompt so later sessions use them without being retold.
+        from jarvis.memory.store import memory_context_for_prompt
+
+        memory_ctx = memory_context_for_prompt(self.config.memory_dir)
+        if memory_ctx:
+            system = f"{system} {memory_ctx}"
         # Grok CLI gotchas (2026-07):
         # - --tools allowlist breaks session create (run_terminal_cmd constraint).
         # - --disallowed-tools Agent (or similar) also breaks the same constraint.
