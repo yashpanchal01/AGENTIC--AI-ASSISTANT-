@@ -40,6 +40,15 @@ def test_load_settings_json(tmp_path: Path) -> None:
     assert s.voice == tmp_path / "voice.onnx"
 
 
+def test_load_settings_accepts_utf8_bom(tmp_path: Path) -> None:
+    """Windows Notepad / PowerShell often write a UTF-8 BOM."""
+    path = tmp_path / "settings.json"
+    payload = json.dumps({"hotkey": "ctrl+alt+j"})
+    path.write_bytes(b"\xef\xbb\xbf" + payload.encode("utf-8"))
+    s = load_settings(path)
+    assert s.hotkey == "ctrl+alt+j"
+
+
 def test_voice_alias_piper_model() -> None:
     s = parse_settings_dict({"piper_model": r"C:\voices\me.onnx"})
     assert s.voice == Path(r"C:\voices\me.onnx")

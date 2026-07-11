@@ -55,7 +55,8 @@ def load_settings(path: Path | None = None) -> UserSettings:
     if not settings_path.is_file():
         return UserSettings()
     try:
-        text = settings_path.read_text(encoding="utf-8")
+        # utf-8-sig strips a Windows/Notepad BOM so hand-edited settings load.
+        text = settings_path.read_text(encoding="utf-8-sig")
     except OSError as exc:
         print(
             f"JARVIS> settings: could not read {settings_path}: {exc}",
