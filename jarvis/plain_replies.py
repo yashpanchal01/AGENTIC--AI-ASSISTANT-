@@ -68,6 +68,10 @@ def looks_like_network_failure(exc: BaseException | str | None) -> bool:
         "errno 11001",  # WSAHOST_NOT_FOUND on Windows
         "errno 10051",  # WSAENETUNREACH
         "errno 10060",  # WSAETIMEDOUT
+        "enotfound",
+        "eai_again",
+        "fetch failed",
+        "socket hang up",
         "offline",
         "dns",
         "ssl",

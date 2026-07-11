@@ -106,6 +106,7 @@ class FakeGoogleWorkspace(GoogleWorkspaceImpl):
             gmail=gmail or FakeGmail(),
             calendar=calendar or FakeCalendar(),
             signed_in=signed_in,
+            works_offline=True,
         )
 
 
@@ -120,4 +121,5 @@ def sample_workspace(
         gmail=gmail or FakeGmail(),
         calendar=calendar or FakeCalendar(),
         signed_in=signed_in,
+        works_offline=True,
     )

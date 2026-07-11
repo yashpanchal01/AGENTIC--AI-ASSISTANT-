@@ -85,9 +85,9 @@ class ClaudeCodeBrain:
             )
 
         if proc.returncode != 0:
-            reply = turn.reply or (stderr[:300] if stderr else "The brain process failed.")
-            # Never dump raw stack traces as the spoken line.
-            if reply and ("Traceback" in reply or (len(reply) > 200 and "Error:" in reply)):
+            # Prefer a short spoken result from stream-json; never read raw stderr aloud.
+            reply = (turn.reply or "").strip()
+            if not reply or "Traceback" in reply or len(reply) > 200:
                 reply = "Something went wrong talking to my brain."
             return BrainTurn(
                 reply=reply,

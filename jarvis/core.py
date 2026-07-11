@@ -70,23 +70,70 @@ def handle_command(
             error="empty_transcript",
         )
 
-    # Gmail/Calendar intents are handled locally (OAuth tokens) before the brain.
-    if google is not None:
-        try:
-            g_result = google.try_handle(text)
-        except Exception as exc:  # noqa: BLE001 — boundary: never crash the REPL
-            reply = "Something went wrong talking to Google."
-            speaker.speak(reply)
-            return CommandResult(
-                reply=reply,
-                actions=(),
-                ok=False,
-                error=type(exc).__name__,
-            )
-        if g_result is not None:
-            return _finish_google(g_result, speaker=speaker)
+    offline = connectivity is not None and not connectivity.is_online()
 
-    if connectivity is not None and not connectivity.is_online():
+    # Gmail/Calendar before the brain. Live Google needs the network; when
+    # offline, refuse reads in plain language (no HTTP hang). Fake sample data
+    # sets works_offline=True so demos still answer.
+    if google is not None:
+        works_offline = bool(getattr(google, "works_offline", False))
+        if offline and not works_offline:
+            try:
+                from jarvis.google.intents import GoogleIntentKind, classify
+
+                intent = classify(text)
+            except Exception:
+                intent = None
+            if intent is not None and intent.kind is not GoogleIntentKind.UNRELATED:
+                write_kinds = (
+                    GoogleIntentKind.WRITE_SEND,
+                    GoogleIntentKind.WRITE_REPLY,
+                    GoogleIntentKind.WRITE_FORWARD,
+                    GoogleIntentKind.WRITE_CALENDAR,
+                )
+                if intent.kind in write_kinds:
+                    # Refusals are local — no network.
+                    try:
+                        g_result = google.try_handle(text)
+                    except Exception as exc:  # noqa: BLE001
+                        reply = "Something went wrong talking to Google."
+                        speaker.speak(reply)
+                        return CommandResult(
+                            reply=reply,
+                            actions=(),
+                            ok=False,
+                            error=type(exc).__name__,
+                        )
+                    if g_result is not None:
+                        return _finish_google(g_result, speaker=speaker)
+                else:
+                    reply = (
+                        "I can't reach Google right now — "
+                        "check your internet connection."
+                    )
+                    speaker.speak(reply)
+                    return CommandResult(
+                        reply=reply,
+                        actions=(),
+                        ok=False,
+                        error="google_unreachable",
+                    )
+        else:
+            try:
+                g_result = google.try_handle(text)
+            except Exception as exc:  # noqa: BLE001 — boundary: never crash the REPL
+                reply = "Something went wrong talking to Google."
+                speaker.speak(reply)
+                return CommandResult(
+                    reply=reply,
+                    actions=(),
+                    ok=False,
+                    error=type(exc).__name__,
+                )
+            if g_result is not None:
+                return _finish_google(g_result, speaker=speaker)
+
+    if offline:
         reply = BRAIN_UNREACHABLE
         speaker.speak(reply)
         return CommandResult(

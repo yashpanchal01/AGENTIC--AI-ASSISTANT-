@@ -37,6 +37,8 @@ class GoogleWorkspaceImpl:
     gmail: GmailReader | None = None
     calendar: CalendarReader | None = None
     signed_in: bool = True
+    # Sample/fake data can answer without the network; live OAuth clients cannot.
+    works_offline: bool = False
 
     def try_handle(self, utterance: str) -> GoogleResult | None:
         intent = classify(utterance)
