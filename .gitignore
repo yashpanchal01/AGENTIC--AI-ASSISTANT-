@@ -1,8 +1,12 @@
-jarvis-proto/multi-test/
 node_modules/
 __pycache__/
 *.py[cod]
 .venv/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
 benches/wake_word_ab/results/
 .env
 *.log
+.jarvis/
