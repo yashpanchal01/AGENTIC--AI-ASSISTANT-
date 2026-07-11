@@ -15,6 +15,11 @@ from jarvis.audio.capture import MicRecorder, RecordResult
 from jarvis.brain.base import Brain
 from jarvis.core import handle_command
 from jarvis.overlay.base import Overlay
+from jarvis.overlay.lifecycle import (
+    DEFAULT_HEARD_DWELL_S,
+    DEFAULT_SPEAKING_MIN_S,
+    SpeakingSpeaker,
+)
 from jarvis.overlay.states import OverlayState
 from jarvis.plain_replies import plain_error_reply
 from jarvis.stt.base import Transcriber
@@ -26,6 +31,9 @@ if TYPE_CHECKING:
     from jarvis.connectivity import Connectivity
 
 TriggerSource = Literal["wake", "hotkey"]
+
+# Gentle "mic hot" amplitude while ARMED (Aurora bars scale with level).
+_ARMED_LEVEL = 0.55
 
 
 def _empty_record(sample_rate: int = 16_000) -> RecordResult:
@@ -61,11 +69,29 @@ def _transcribe_record(
     return text, None
 
 
-def _speak_local_error(speaker: Speaker, error: str) -> None:
+def _speak_local_error(
+    speaker: Speaker,
+    error: str,
+    *,
+    overlay: Overlay | None = None,
+    speaking_min_s: float = DEFAULT_SPEAKING_MIN_S,
+) -> None:
+    """Speak a plain-language local failure; flip overlay to SPEAKING when present."""
+    reply = plain_error_reply(error)
     try:
-        speaker.speak(plain_error_reply(error))
+        if overlay is not None:
+            SpeakingSpeaker(
+                speaker, overlay, speaking_min_s=speaking_min_s
+            ).speak(reply)
+        else:
+            speaker.speak(reply)
     except Exception:  # noqa: BLE001 — still return the error code
         pass
+
+
+def _arm(overlay: Overlay | None) -> None:
+    if overlay is not None:
+        overlay.set_state(OverlayState.ARMED, level=_ARMED_LEVEL)
 
 
 def run_armed_pipeline(
@@ -82,6 +108,8 @@ def run_armed_pipeline(
     acknowledge_text: str | None = "Yes?",
     connectivity: Connectivity | None = None,
     unload_stt_after: bool = False,
+    heard_dwell_s: float = DEFAULT_HEARD_DWELL_S,
+    speaking_min_s: float = DEFAULT_SPEAKING_MIN_S,
 ) -> ListenResult:
     """Single command after arming (wake or hotkey). Shared entry point.
 
@@ -89,11 +117,10 @@ def run_armed_pipeline(
     Two-step (wake): if only the wake phrase remains, acknowledge and record again.
     Hotkey: no wake stripping; one record → STT → handle_command.
 
-    Local failures are spoken in plain language. Overlay always returns to REST.
-    ARMED is only held while the mic is recording (not during STT).
+    Local failures are spoken in plain language (SPEAKING chrome when overlay is on).
+    Overlay always returns to REST. ARMED is only held while the mic is recording.
     """
-    if overlay is not None:
-        overlay.set_state(OverlayState.ARMED)
+    _arm(overlay)
 
     rest_owned_by_handler = False
     try:
@@ -106,7 +133,9 @@ def run_armed_pipeline(
             record, transcriber, unload_stt_after=unload_stt_after
         )
         if err:
-            _speak_local_error(speaker, err)
+            _speak_local_error(
+                speaker, err, overlay=overlay, speaking_min_s=speaking_min_s
+            )
             return ListenResult(
                 transcript=raw,
                 command=None,
@@ -118,16 +147,22 @@ def run_armed_pipeline(
         if source == "wake":
             command_text = strip_wake_phrase(raw, wake_phrases)
             if not command_text:
-                # Two-step: wake alone → acknowledge → listen for the command.
+                # Two-step: wake alone → SPEAKING acknowledge → ARMED → command.
                 if on_two_step_ready is not None:
                     on_two_step_ready()
                 elif acknowledge_text and hasattr(speaker, "speak"):
                     try:
-                        speaker.speak(acknowledge_text)
+                        if overlay is not None:
+                            SpeakingSpeaker(
+                                speaker,
+                                overlay,
+                                speaking_min_s=speaking_min_s,
+                            ).speak(acknowledge_text)
+                        else:
+                            speaker.speak(acknowledge_text)
                     except Exception:
                         pass
-                if overlay is not None:
-                    overlay.set_state(OverlayState.ARMED)
+                _arm(overlay)
 
                 record = recorder.record_until_silence()
                 if overlay is not None:
@@ -137,7 +172,9 @@ def run_armed_pipeline(
                     record, transcriber, unload_stt_after=unload_stt_after
                 )
                 if err2:
-                    _speak_local_error(speaker, err2)
+                    _speak_local_error(
+                        speaker, err2, overlay=overlay, speaking_min_s=speaking_min_s
+                    )
                     return ListenResult(
                         transcript=raw2,
                         command=None,
@@ -148,7 +185,12 @@ def run_armed_pipeline(
                 raw = raw2
 
         if not command_text.strip():
-            _speak_local_error(speaker, "empty_transcript")
+            _speak_local_error(
+                speaker,
+                "empty_transcript",
+                overlay=overlay,
+                speaking_min_s=speaking_min_s,
+            )
             return ListenResult(
                 transcript=raw,
                 command=None,
@@ -167,6 +209,8 @@ def run_armed_pipeline(
                 overlay=overlay,
                 google=google,
                 connectivity=connectivity,
+                heard_dwell_s=heard_dwell_s,
+                speaking_min_s=speaking_min_s,
             )
         else:
             result = handle_command(

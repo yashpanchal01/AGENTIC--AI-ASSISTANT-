@@ -223,6 +223,7 @@ def test_two_step_wake_then_command() -> None:
         config=_silence_cfg(),
         block_sessions=[_speech_quiet(), _speech_quiet()],
     )
+    overlay = FakeOverlay()
 
     outcome = run_armed_pipeline(
         recorder=rec,
@@ -231,12 +232,49 @@ def test_two_step_wake_then_command() -> None:
         speaker=speaker,
         source="wake",
         acknowledge_text="Yes?",
+        overlay=overlay,
+        heard_dwell_s=0,
+        speaking_min_s=0,
     )
     assert outcome.ok
     assert outcome.transcript == "open notepad"
     assert speaker.spoken[0] == "Yes?"
     assert speaker.spoken[1] == "Launched."
     assert len(stt.calls) == 2
+    # SPEAKING for "Yes?" must precede the second ARMED (not stuck on WORKING).
+    states = overlay.states
+    i_speak = states.index(OverlayState.SPEAKING)
+    armed_idxs = [i for i, s in enumerate(states) if s is OverlayState.ARMED]
+    assert len(armed_idxs) >= 2
+    assert i_speak < armed_idxs[1]
+
+
+def test_front_door_local_error_shows_speaking() -> None:
+    brain = FakeBrain(script=[BrainTurn(reply="nope", actions=())])
+    speaker = FakeSpeaker()
+    stt = FakeTranscriber(text="hello")  # unused — no speech
+    sr = 16_000
+    quiet = [np.zeros(sr, dtype=np.float32)]
+    rec = MicRecorder(
+        config=SilenceConfig(max_lead_silence_s=0.5, max_record_s=5.0),
+        blocks=quiet,
+    )
+    overlay = FakeOverlay()
+
+    outcome = run_armed_pipeline(
+        recorder=rec,
+        transcriber=stt,
+        brain=brain,
+        speaker=speaker,
+        source="wake",
+        overlay=overlay,
+        heard_dwell_s=0,
+        speaking_min_s=0,
+    )
+    assert outcome.error == "no_speech"
+    assert speaker.spoken  # plain-language error
+    assert OverlayState.SPEAKING in overlay.states
+    assert overlay.states[-1] is OverlayState.REST
 
 
 def test_hotkey_does_not_strip_incidental_jarvis_in_middle() -> None:
@@ -280,6 +318,8 @@ def test_front_door_drives_overlay_lifecycle() -> None:
         overlay=overlay,
         enable_hotkey=False,
         frames_factory=frames,
+        heard_dwell_s=0,
+        speaking_min_s=0,
     )
     cycles = session.run(max_cycles=1)
     assert cycles[0].outcome.ok
@@ -289,6 +329,10 @@ def test_front_door_drives_overlay_lifecycle() -> None:
     assert OverlayState.WORKING in states
     assert OverlayState.SPEAKING in states
     assert states[-1] is OverlayState.REST
+    # ARMED carries mic-hot level for bar amplitude.
+    armed_events = [e for e in overlay.events if e.state is OverlayState.ARMED]
+    assert armed_events
+    assert armed_events[0].level is not None and armed_events[0].level > 0
 
 
 def test_run_one_cycle_is_shared_for_wake_and_hotkey() -> None:

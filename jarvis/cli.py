@@ -200,11 +200,8 @@ def make_wake_detector(config: JarvisConfig, *, fake_wake: bool):
     if fake_wake:
         from jarvis.wake.fake import FakeWakeDetector
 
-        # Fire on first frame of each wait (reset between cycles clears count via
-        # fire_after re-armed in session by using a detector that fires every
-        # fire_after frames from a fresh counter — we use fire_after_frames=1
-        # and reset() which does not re-arm; session uses frames that keep
-        # coming. Prefer a detector that fires once per process burst:
+        # Fire once per wait: FakeWakeDetector.reset() re-arms fire_after_frames
+        # at the start of each FrontDoorSession.wait_for_trigger().
         return FakeWakeDetector(fire_after_frames=1)
     from jarvis.wake.factory import create_wake_detector
 
@@ -371,6 +368,7 @@ def run_daemon(
             msg = {
                 "no_speech": "I didn't hear anything.",
                 "empty_transcript": "I heard sound but couldn't transcribe it.",
+                "stt_failed": "I couldn't transcribe that.",
             }.get(out.error, out.error)
             print(f"[{src}] JARVIS> {msg}")
             return

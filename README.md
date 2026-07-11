@@ -72,6 +72,8 @@ py -3.13 -m jarvis --fake --no-speak --listen
 
 ```powershell
 # Real detectors (Porcupine if PICOVOICE_ACCESS_KEY set, else openWakeWord)
+# Note: openWakeWord may download ONNX models on first run (needs internet once;
+# after that detection is fully offline). Prefer Porcupine for offline-first boot.
 py -3.13 -m jarvis --daemon
 py -3.13 -m jarvis --front-door --hotkey ctrl+shift+j
 

@@ -26,6 +26,12 @@ except ImportError as exc:  # pragma: no cover - exercised when ui extra missing
     ) from exc
 
 
+class _StateBridge(QtCore.QObject):
+    """Carries (state, transcript|None, level|None) snapshots to the UI thread."""
+
+    apply = QtCore.Signal(object)
+
+
 def _ease_hard_s(t: float) -> float:
     t = max(0.0, min(1.0, t))
     return t * t * (3.0 - 2.0 * t)
@@ -93,7 +99,7 @@ class AuroraOverlay(QtWidgets.QWidget):
         self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating)
         self.setFocusPolicy(QtCore.Qt.NoFocus)
 
-        # Public fields written from worker threads; UI thread reads them.
+        # Snapshot fields: applied on the UI thread; worker threads only emit.
         self.state: OverlayState = OverlayState.REST
         self.preview: str = ""
         self.level: float = 0.0
@@ -117,6 +123,12 @@ class AuroraOverlay(QtWidgets.QWidget):
         self.f_title = QtGui.QFont("Segoe UI", 10, QtGui.QFont.DemiBold)
         self.f_prev = QtGui.QFont("Segoe UI", 9)
 
+        # Marshal worker-thread set_state onto the UI thread (queued).
+        self._bridge = _StateBridge(self)
+        self._bridge.apply.connect(
+            self._apply_snapshot, QtCore.Qt.QueuedConnection
+        )
+
         self.setWindowOpacity(0.0)
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self._animate)
@@ -131,6 +143,20 @@ class AuroraOverlay(QtWidgets.QWidget):
         transcript: str | None = None,
         level: float | None = None,
     ) -> None:
+        """Update lifecycle state. Safe to call from the voice worker thread.
+
+        Never calls Qt paint/show APIs here — only posts a snapshot for the UI
+        thread (or applies inline when already on the UI thread).
+        """
+        snap = (state, transcript, level)
+        if QtCore.QThread.currentThread() is self.thread():
+            self._apply_snapshot(snap)
+        else:
+            self._bridge.apply.emit(snap)
+
+    @QtCore.Slot(object)
+    def _apply_snapshot(self, snap: object) -> None:
+        state, transcript, level = snap  # type: ignore[misc]
         self.state = state
         if transcript is not None:
             self.preview = transcript
@@ -221,8 +247,11 @@ class AuroraOverlay(QtWidgets.QWidget):
         if not active and self._opacity < 0.04:
             if self.isVisible():
                 self.hide()
-                self.preview = ""
-                self._lines = []
+                # Only clear transcript if we are still REST (worker may have
+                # re-armed between fade start and this frame).
+                if self.state not in ACTIVE_STATES:
+                    self.preview = ""
+                    self._lines = []
                 self._h = self._h_frm = self._h_to = float(self.BASE_H)
             return
 
@@ -232,7 +261,11 @@ class AuroraOverlay(QtWidgets.QWidget):
             self.show()
         self.setWindowOpacity(self._opacity)
 
-        self._lvl += (min(1.0, self.level) - self._lvl) * 0.35
+        # Synthetic mic pulse when ARMED and no RMS was pushed (level stays 0).
+        effective = self.level
+        if state is OverlayState.ARMED and effective < 0.05:
+            effective = 0.45 + 0.2 * abs(math.sin(self._tick * 0.15))
+        self._lvl += (min(1.0, effective) - self._lvl) * 0.35
         self._tick_bars()
         self._lines = _wrap_tail(self.preview, self.f_prev, self.PILL_W - 48, 2)
 

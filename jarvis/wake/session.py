@@ -58,6 +58,9 @@ class FrontDoorSession:
     on_cycle: Callable[[CycleResult], None] | None = None
     connectivity: Any = None
     unload_stt_after: bool = False
+    # Overlay dwell knobs (defaults match lifecycle; tests pass 0).
+    heard_dwell_s: float | None = None
+    speaking_min_s: float | None = None
 
     _stop: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
     _hotkey_event: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
@@ -122,19 +125,24 @@ class FrontDoorSession:
 
     def run_one_cycle(self, source: TriggerSource) -> ListenResult:
         """Run the shared armed pipeline once (wake and hotkey both land here)."""
-        return run_armed_pipeline(
-            recorder=self.recorder,
-            transcriber=self.transcriber,
-            brain=self.brain,
-            speaker=self.speaker,
-            source=source,
-            overlay=self.overlay,
-            google=self.google,
-            wake_phrases=self.wake_phrases,
-            acknowledge_text=self.acknowledge_text,
-            connectivity=self.connectivity,
-            unload_stt_after=self.unload_stt_after,
-        )
+        kwargs: dict[str, Any] = {
+            "recorder": self.recorder,
+            "transcriber": self.transcriber,
+            "brain": self.brain,
+            "speaker": self.speaker,
+            "source": source,
+            "overlay": self.overlay,
+            "google": self.google,
+            "wake_phrases": self.wake_phrases,
+            "acknowledge_text": self.acknowledge_text,
+            "connectivity": self.connectivity,
+            "unload_stt_after": self.unload_stt_after,
+        }
+        if self.heard_dwell_s is not None:
+            kwargs["heard_dwell_s"] = self.heard_dwell_s
+        if self.speaking_min_s is not None:
+            kwargs["speaking_min_s"] = self.speaking_min_s
+        return run_armed_pipeline(**kwargs)
 
     def run(self, *, max_cycles: int | None = None) -> list[CycleResult]:
         """Main front-door loop. Returns completed cycle results."""
@@ -164,5 +172,7 @@ class FrontDoorSession:
                 if self.on_cycle is not None:
                     self.on_cycle(cycle)
         finally:
+            # Always signal stop so the fake-hotkey poller (and any waiters) exit.
+            self._stop.set()
             self._stop_hotkey_backend()
         return results

@@ -28,12 +28,16 @@ class OpenWakeWordDetector:
         import openwakeword
         from openwakeword.model import Model
 
-        openwakeword.utils.download_models()
-
         self._threshold = threshold
         self._chunk_samples = chunk_samples
 
+        # Prefer cached models; only hit the network when hey_jarvis is missing.
+        # First-run download needs internet — detection itself stays fully local.
         jarvis_paths = self._find_hey_jarvis_models(inference_framework)
+        if not jarvis_paths:
+            openwakeword.utils.download_models()
+            jarvis_paths = self._find_hey_jarvis_models(inference_framework)
+
         if jarvis_paths:
             self._model = Model(
                 wakeword_models=jarvis_paths,

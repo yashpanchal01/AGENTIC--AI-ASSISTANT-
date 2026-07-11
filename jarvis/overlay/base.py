@@ -11,8 +11,9 @@ from jarvis.overlay.states import OverlayState
 class Overlay(Protocol):
     """Public seam for the face of JARVIS.
 
-    Implementations must tolerate calls from worker threads (attribute
-    assignment is enough; paint runs on the UI thread).
+    Implementations must tolerate calls from worker threads. FakeOverlay
+    writes attributes inline; AuroraOverlay marshals snapshots to the UI
+    thread and never calls Qt paint/show APIs inside set_state.
     """
 
     def set_state(

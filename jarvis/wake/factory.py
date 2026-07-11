@@ -93,7 +93,9 @@ def create_wake_detector(
         "No local wake-word detector available.\n"
         f"{detail}\n"
         "Install wake extras: py -3.13 -m pip install -e \".[wake]\"\n"
-        "Optional Porcupine: set PICOVOICE_ACCESS_KEY (https://console.picovoice.ai/)."
+        "Optional Porcupine: set PICOVOICE_ACCESS_KEY (https://console.picovoice.ai/).\n"
+        "openWakeWord may download models on first use (needs internet once; "
+        "runtime detection is fully local after that)."
     )
 
 

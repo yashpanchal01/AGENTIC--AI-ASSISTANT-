@@ -63,3 +63,31 @@ def test_shoot_writes_four_lifecycle_pngs(qapp, tmp_path: Path) -> None:
     for path in paths:
         assert path.is_file()
         assert path.stat().st_size > 1000  # not empty / stub
+
+
+def test_set_state_from_worker_thread_does_not_call_qt_apis(qapp) -> None:
+    """Worker-thread set_state must only post a snapshot (no paint/show)."""
+    import threading
+
+    w = AuroraOverlay()
+    w.timer.stop()
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            # Must not raise; must not touch Qt geometry/show from this thread.
+            w.set_state(OverlayState.HEARD, transcript="from worker", level=0.3)
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join(timeout=2.0)
+    assert not t.is_alive()
+    assert errors == []
+    # Drain the queued apply onto the UI thread.
+    qapp.processEvents()
+    assert w.state is OverlayState.HEARD
+    assert w.preview == "from worker"
+    assert w.level == 0.3
+    w.close()

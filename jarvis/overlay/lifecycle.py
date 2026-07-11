@@ -120,7 +120,8 @@ def listen_and_handle_with_overlay(
 
     Local failures are spoken in plain language; overlay always ends in REST.
     """
-    overlay.set_state(OverlayState.ARMED)
+    # ARMED level drives Aurora bar amplitude ("mic hot").
+    overlay.set_state(OverlayState.ARMED, level=0.55)
     rest_owned_by_handler = False
     try:
         record = recorder.record_until_silence()
