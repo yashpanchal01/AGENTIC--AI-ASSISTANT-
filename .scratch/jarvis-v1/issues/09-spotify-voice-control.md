@@ -1,6 +1,6 @@
 # 09 — Spotify voice control
 
-Status: ready-for-agent
+Status: done
 
 ## What to build
 
@@ -8,10 +8,10 @@ Voice control for everyday Spotify use: play, pause, resume, skip, play by song/
 
 ## Acceptance criteria
 
-- [ ] Play / pause / resume / skip work by voice through JARVIS
-- [ ] Request by song, artist, or playlist name works for common cases
-- [ ] Now-playing and volume adjust work by voice
-- [ ] Failures are spoken in plain language (e.g. Spotify not running / not linked)
+- [x] Play / pause / resume / skip work by voice through JARVIS
+- [x] Request by song, artist, or playlist name works for common cases
+- [x] Now-playing and volume adjust work by voice
+- [x] Failures are spoken in plain language (e.g. Spotify not running / not linked)
 
 ## Blocked by
 

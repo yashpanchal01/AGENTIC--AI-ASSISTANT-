@@ -40,6 +40,8 @@ class UserSettings:
     voice: Path | None = None
     # Optional explicit piper binary (advanced).
     piper_exe: str | None = None
+    # Spotify developer-app client ID (issue 09) — an ID, not a secret.
+    spotify_client_id: str | None = None
     raw: dict[str, Any] | None = None
 
 
@@ -127,12 +129,17 @@ def parse_settings_dict(data: dict[str, Any]) -> UserSettings:
     if piper_exe is not None:
         piper_exe = str(piper_exe).strip() or None
 
+    spotify_client_id = data.get("spotify_client_id")
+    if spotify_client_id is not None:
+        spotify_client_id = str(spotify_client_id).strip() or None
+
     return UserSettings(
         hotkey=hotkey,
         enable_hotkey=enable_hotkey,
         approved_folders=folders,
         voice=voice,
         piper_exe=piper_exe,
+        spotify_client_id=spotify_client_id,
         raw=dict(data),
     )
 
@@ -156,6 +163,8 @@ def apply_user_settings(config: Any, settings: UserSettings | None = None) -> An
         updates["piper_model"] = settings.voice
     if settings.piper_exe is not None:
         updates["piper_exe"] = settings.piper_exe
+    if settings.spotify_client_id is not None:
+        updates["spotify_client_id"] = settings.spotify_client_id
     if not updates:
         return config
     # Dataclass replace keeps identity of other fields.

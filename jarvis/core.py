@@ -49,6 +49,17 @@ class MemoryHandler(Protocol):
     def try_handle(self, utterance: str) -> object | None: ...
 
 
+@runtime_checkable
+class SpotifyHandler(Protocol):
+    """Optional Spotify playback seam (issue 09).
+
+    try_handle returns an object with reply/actions/denied/ok/error fields, or
+    None to fall through to the brain.
+    """
+
+    def try_handle(self, utterance: str) -> object | None: ...
+
+
 @dataclass(frozen=True)
 class CommandResult:
     """Observable outcome of one handle_command call."""
@@ -70,6 +81,7 @@ def handle_command(
     speaker: Speaker,
     google: GoogleHandler | None = None,
     memory: MemoryHandler | None = None,
+    spotify: SpotifyHandler | None = None,
     connectivity: Connectivity | None = None,
     long_tasks: LongTaskService | None = None,
     overlay: Overlay | None = None,
@@ -78,7 +90,7 @@ def handle_command(
     long_task_threshold_s: float | None = None,
     audit: Any = None,
 ) -> CommandResult:
-    """Run one command through memory / Google (if matched) or the brain, then speak.
+    """Run one command through memory / Google / Spotify (if matched) or the brain, then speak.
 
     Automated test seam (PRD): inject FakeBrain + optional sample_workspace and
     assert on reply text + actions taken.
@@ -87,6 +99,12 @@ def handle_command(
     "what do you remember …" / "forget …" are answered locally from plain
     markdown notes — before Google and the brain, and even while offline.
     Secrets are never written to memory notes (spoken refusal, ``denied=True``).
+
+    Spotify (issue 09): when *spotify* is provided, everyday music commands —
+    play / pause / resume / skip / play by song, artist, or playlist name /
+    now-playing / volume — are routed to the Spotify controller before the
+    brain. If Spotify isn't configured, the reply is a short spoken pointer to
+    docs/spotify-setup.md instead of an error.
 
     Failures are always spoken in plain language (never silent, never a stack
     trace). When *connectivity* reports offline, the cloud brain is not called
@@ -246,6 +264,57 @@ def handle_command(
             if g_result is not None:
                 result = _finish_handler(g_result, speaker=speaker)
                 _audit_result(audit, result, path="google")
+                return result
+
+    # Spotify playback before the brain (issue 09). Live control needs the
+    # network; setup pointers ("not configured" / "not signed in") are local,
+    # so only a signed-in live controller is gated when offline. Fakes set
+    # works_offline=True so demos still answer.
+    if spotify is not None:
+        works_offline = bool(getattr(spotify, "works_offline", False))
+        needs_network = bool(
+            getattr(spotify, "configured", True)
+            and getattr(spotify, "signed_in", True)
+        )
+        if offline and not works_offline and needs_network:
+            try:
+                from jarvis.spotify.intents import SpotifyIntentKind
+                from jarvis.spotify.intents import classify as classify_spotify
+
+                s_intent = classify_spotify(text)
+            except Exception:
+                s_intent = None
+            if s_intent is not None and s_intent.kind is not SpotifyIntentKind.UNRELATED:
+                reply = (
+                    "I can't reach Spotify right now — "
+                    "check your internet connection."
+                )
+                speaker.speak(reply)
+                result = CommandResult(
+                    reply=reply,
+                    actions=(),
+                    ok=False,
+                    error="spotify_unreachable",
+                )
+                _audit_result(audit, result, path="spotify")
+                return result
+        else:
+            try:
+                s_result = spotify.try_handle(text)
+            except Exception as exc:  # noqa: BLE001 — boundary: never crash the REPL
+                reply = "Something went wrong talking to Spotify."
+                speaker.speak(reply)
+                result = CommandResult(
+                    reply=reply,
+                    actions=(),
+                    ok=False,
+                    error=type(exc).__name__,
+                )
+                _audit_result(audit, result, path="spotify")
+                return result
+            if s_result is not None:
+                result = _finish_handler(s_result, speaker=speaker)
+                _audit_result(audit, result, path="spotify")
                 return result
 
     if offline:

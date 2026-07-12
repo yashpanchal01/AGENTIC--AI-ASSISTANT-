@@ -33,6 +33,8 @@ JARVIS_SYSTEM_PROMPT = (
     "yes; proceed with the action. "
     "Gmail and Calendar are handled by JARVIS itself (read-only); do not send, "
     "reply, forward email or create calendar events. "
+    "Spotify playback (play, pause, skip, now playing, volume) is handled by "
+    "JARVIS itself; do not try to control music yourself. "
     "When something fails (file not found, app missing, tool error), explain in "
     "one short plain sentence what went wrong and why — never fail silently and "
     "never return a stack trace. "
@@ -132,6 +134,10 @@ class JarvisConfig:
     # Google OAuth (issue 7) — paths only; tokens never under memory notes
     google_client_secrets: Path | None = None
     google_token_path: Path | None = None
+    # Spotify (issue 09) — free developer-app client ID (PKCE, no secret).
+    # None → not configured; music commands answer with a setup pointer.
+    spotify_client_id: str | None = None
+    spotify_token_path: Path | None = None
     # Markdown long-term memory (issue 07) — None → JARVIS_MEMORY_DIR or
     # ~/.jarvis/memory (see jarvis.memory.store.default_memory_dir).
     memory_dir: Path | None = None
@@ -177,6 +183,8 @@ class JarvisConfig:
         pico = os.environ.get("PICOVOICE_ACCESS_KEY") or None
         secrets = os.environ.get("JARVIS_GOOGLE_CLIENT_SECRETS")
         token = os.environ.get("JARVIS_GOOGLE_TOKEN")
+        spotify_id = (os.environ.get("JARVIS_SPOTIFY_CLIENT_ID") or "").strip() or None
+        spotify_token = os.environ.get("JARVIS_SPOTIFY_TOKEN")
         memory_env = os.environ.get("JARVIS_MEMORY_DIR")
         check_net = os.environ.get("JARVIS_CHECK_NET", "1") not in (
             "0",
@@ -207,6 +215,8 @@ class JarvisConfig:
             picovoice_access_key=pico,
             google_client_secrets=Path(secrets) if secrets else None,
             google_token_path=Path(token) if token else None,
+            spotify_client_id=spotify_id,
+            spotify_token_path=Path(spotify_token) if spotify_token else None,
             memory_dir=Path(memory_env) if memory_env else None,
             check_connectivity=check_net,
             unload_stt_between_commands=unload_stt,

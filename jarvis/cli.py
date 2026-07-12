@@ -164,6 +164,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable Gmail/Calendar integration for this run",
     )
     p.add_argument(
+        "--spotify-login",
+        action="store_true",
+        help="One-time Spotify sign-in (PKCE, free developer app); then exit",
+    )
+    p.add_argument(
+        "--fake-spotify",
+        action="store_true",
+        help="Use sample in-process Spotify playback data (no OAuth)",
+    )
+    p.add_argument(
+        "--no-spotify",
+        action="store_true",
+        help="Disable Spotify voice control for this run",
+    )
+    p.add_argument(
         "--no-memory",
         action="store_true",
         help="Disable markdown long-term memory for this run",
@@ -267,6 +282,14 @@ def make_google(*, fake_google: bool, no_google: bool):
     return build_google_workspace(force_fake=fake_google)
 
 
+def make_spotify(config: JarvisConfig, *, fake_spotify: bool, no_spotify: bool):
+    if no_spotify:
+        return None
+    from jarvis.spotify.controller import build_spotify
+
+    return build_spotify(config, force_fake=fake_spotify)
+
+
 def make_memory(config: JarvisConfig, *, no_memory: bool = False):
     """Markdown long-term memory handler (issue 07), or None when disabled."""
     if no_memory:
@@ -353,6 +376,7 @@ def run_once(
     overlay=None,
     google=None,
     memory=None,
+    spotify=None,
     connectivity=None,
     long_tasks=None,
     confirmer=None,
@@ -371,6 +395,7 @@ def run_once(
             overlay=overlay,
             google=google,
             memory=memory,
+            spotify=spotify,
             connectivity=connectivity,
             long_tasks=long_tasks,
             confirmer=confirmer,
@@ -384,6 +409,7 @@ def run_once(
             speaker=speaker,
             google=google,
             memory=memory,
+            spotify=spotify,
             connectivity=connectivity,
             long_tasks=long_tasks,
             confirmer=confirmer,
@@ -440,6 +466,7 @@ def run_listen(
     overlay=None,
     google=None,
     memory=None,
+    spotify=None,
     connectivity=None,
     long_tasks=None,
     confirmer=None,
@@ -468,6 +495,7 @@ def run_listen(
                 overlay=overlay,
                 google=google,
                 memory=memory,
+                spotify=spotify,
                 connectivity=connectivity,
                 long_tasks=long_tasks,
                 confirmer=confirmer,
@@ -483,6 +511,7 @@ def run_listen(
                 speaker=speaker,
                 google=google,
                 memory=memory,
+                spotify=spotify,
                 connectivity=connectivity,
                 long_tasks=long_tasks,
                 confirmer=confirmer,
@@ -521,6 +550,7 @@ def run_daemon(
     overlay=None,
     google=None,
     memory=None,
+    spotify=None,
     connectivity=None,
     long_tasks=None,
     confirmer=None,
@@ -569,6 +599,7 @@ def run_daemon(
         overlay=overlay,
         google=google,
         memory=memory,
+        spotify=spotify,
         long_tasks=long_tasks,
         confirmer=confirmer,
         hotkey=config.hotkey,
@@ -639,6 +670,7 @@ def run_repl(
     fake_stt: str | None,
     google=None,
     memory=None,
+    spotify=None,
     connectivity=None,
     long_tasks=None,
     audit=None,
@@ -666,6 +698,16 @@ def run_repl(
         print(f"  memory: {root if root is not None else 'on'}")
     else:
         print("  memory: off")
+    if spotify is not None:
+        if not getattr(spotify, "configured", True):
+            state = "not set up (see docs/spotify-setup.md)"
+        elif not getattr(spotify, "signed_in", True):
+            state = "not signed in (run --spotify-login)"
+        else:
+            state = "linked"
+        print(f"  spotify: {state} ({type(spotify).__name__})")
+    else:
+        print("  spotify: off")
     print()
 
     # Lazy STT — only load whisper when the user actually listens.
@@ -709,6 +751,7 @@ def run_repl(
                 transcriber=transcriber,
                 google=google,
                 memory=memory,
+                spotify=spotify,
                 connectivity=connectivity,
                 long_tasks=long_tasks,
                 unload_stt_after=config.unload_stt_between_commands,
@@ -723,6 +766,7 @@ def run_repl(
             speaker=speaker,
             google=google,
             memory=memory,
+            spotify=spotify,
             connectivity=connectivity,
             long_tasks=long_tasks,
             confirmer=make_confirmer(interactive=True),
@@ -928,6 +972,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"JARVIS> Google signed in (Gmail + Calendar read-only). Token: {path}")
         return 0
 
+    if args.spotify_login:
+        from jarvis.spotify.base import SpotifyError
+        from jarvis.spotify.oauth import run_spotify_login
+        from jarvis.spotify.tokens import spotify_token_store
+
+        try:
+            store = spotify_token_store(config.spotify_token_path)
+            path = run_spotify_login(
+                client_id=config.spotify_client_id, token_store=store
+            )
+        except SpotifyError as e:
+            print(f"JARVIS> Spotify login failed: {e}", file=sys.stderr)
+            return 2
+        print(f"JARVIS> Spotify linked (playback control). Token: {path}")
+        return 0
+
     if args.shoot_overlay:
         from jarvis.overlay.aurora import shoot_overlay_states
 
@@ -950,6 +1010,11 @@ def main(argv: list[str] | None = None) -> int:
     use_fake = config.brain_provider == "fake" or args.fake
     use_fake_google = bool(args.fake_google or (use_fake and not args.no_google))
     google = make_google(fake_google=use_fake_google, no_google=args.no_google)
+    # Same for Spotify: --fake runs on sample playback data (offline demos).
+    use_fake_spotify = bool(args.fake_spotify or (use_fake and not args.no_spotify))
+    spotify = make_spotify(
+        config, fake_spotify=use_fake_spotify, no_spotify=args.no_spotify
+    )
     # Markdown long-term memory is local and works with every brain (incl. fake).
     memory = make_memory(config, no_memory=args.no_memory)
     # Fake brain needs no network; skip connectivity pre-check so offline demos work.
@@ -1021,6 +1086,7 @@ def main(argv: list[str] | None = None) -> int:
                 overlay=overlay,
                 google=google,
                 memory=memory,
+                spotify=spotify,
                 connectivity=connectivity,
                 long_tasks=long_tasks,
                 max_cycles=args.max_cycles,
@@ -1063,6 +1129,7 @@ def main(argv: list[str] | None = None) -> int:
                     overlay=ov,
                     google=google,
                     memory=memory,
+                    spotify=spotify,
                     connectivity=connectivity,
                     long_tasks=long_tasks,
                     unload_stt_after=config.unload_stt_between_commands,
@@ -1078,6 +1145,7 @@ def main(argv: list[str] | None = None) -> int:
             announce=args.fake_stt is None,
             google=google,
             memory=memory,
+            spotify=spotify,
             connectivity=connectivity,
             long_tasks=long_tasks,
             unload_stt_after=config.unload_stt_between_commands,
@@ -1095,6 +1163,7 @@ def main(argv: list[str] | None = None) -> int:
                     overlay=ov,
                     google=google,
                     memory=memory,
+                    spotify=spotify,
                     connectivity=connectivity,
                     long_tasks=long_tasks,
                     long_task_threshold_s=config.long_task_threshold_s,
@@ -1107,6 +1176,7 @@ def main(argv: list[str] | None = None) -> int:
             speaker=speaker,
             google=google,
             memory=memory,
+            spotify=spotify,
             connectivity=connectivity,
             long_tasks=long_tasks,
             long_task_threshold_s=config.long_task_threshold_s,
@@ -1128,6 +1198,7 @@ def main(argv: list[str] | None = None) -> int:
         fake_stt=None,
         google=google,
         memory=memory,
+        spotify=spotify,
         connectivity=connectivity,
         long_tasks=long_tasks,
         audit=audit,

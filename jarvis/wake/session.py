@@ -67,6 +67,7 @@ class FrontDoorSession:
     overlay: Overlay | None = None
     google: Any = None
     memory: Any = None
+    spotify: Any = None
     long_tasks: LongTaskService | None = None
     confirmer: Any = None
     wake_phrases: tuple[str, ...] = DEFAULT_WAKE_PHRASES
@@ -215,6 +216,7 @@ class FrontDoorSession:
             "overlay": self.overlay,
             "google": self.google,
             "memory": self.memory,
+            "spotify": self.spotify,
             "long_tasks": self.long_tasks,
             "confirmer": self.confirmer,
             "wake_phrases": self.wake_phrases,

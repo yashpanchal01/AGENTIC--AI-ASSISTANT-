@@ -15,6 +15,8 @@ loop**, **mic → silence → whisper**, **wake word + hotkey front doors**, and
 - Optional wake/hotkey: `pip install -e ".[wake]"` (+ free `PICOVOICE_ACCESS_KEY` for Porcupine)
 - Optional UI: `pip install -e ".[ui]"` (PySide6 Aurora overlay)
 - Optional Google (Gmail + Calendar read-only): `pip install -e ".[google]"`
+- Optional Spotify voice control: a free Spotify developer app — no extra
+  installs (stdlib only). One-time setup: [docs/spotify-setup.md](./docs/spotify-setup.md)
 
 ## Setup
 
@@ -115,7 +117,8 @@ py -3.13 -m jarvis --daemon
 {
   "hotkey": "ctrl+shift+j",
   "approved_folders": ["C:\\Users\\You\\Documents", "C:\\Users\\You\\Downloads"],
-  "voice": "C:\\Users\\You\\Downloads\\en_GB-northern_english_male-medium.onnx"
+  "voice": "C:\\Users\\You\\Downloads\\en_GB-northern_english_male-medium.onnx",
+  "spotify_client_id": "your-spotify-app-client-id"
 }
 ```
 
@@ -162,6 +165,35 @@ py -3.13 -m jarvis --fake --no-speak --once "send an email to bob"   # declined
 # Real signed-in account:
 py -3.13 -m jarvis --no-speak --once "any new email?"
 ```
+
+### Spotify voice control (issue 09)
+
+Everyday music by voice: **play / pause / resume / skip**, play by **song,
+artist, or playlist name**, **now-playing**, and **volume** — routed locally
+before the cloud brain. Failures are spoken in plain language ("Spotify isn't
+active on any device…"). "Open Spotify" stays an app launch for the brain.
+
+One-time setup (free developer app + Authorization Code **PKCE** — no client
+secret): **[docs/spotify-setup.md](./docs/spotify-setup.md)**. Tokens live
+under `%LOCALAPPDATA%\Jarvis\` (never in memory notes). Note: Spotify only
+allows remote playback control on Premium accounts (spoken plainly if not).
+
+```powershell
+# 1) Create the free app + set "spotify_client_id" (settings.json or env), then:
+py -3.13 -m jarvis --spotify-login
+
+# 2) Voice / text demos (sample data, no OAuth):
+py -3.13 -m jarvis --fake --no-speak --once "play some lo-fi"
+py -3.13 -m jarvis --fake --no-speak --once "pause the music"
+py -3.13 -m jarvis --fake --no-speak --once "what's playing?"
+py -3.13 -m jarvis --fake --no-speak --once "turn it up"
+
+# Real linked account:
+py -3.13 -m jarvis --no-speak --once "play bohemian rhapsody by queen"
+```
+
+Not set up yet? Music commands answer with a short spoken pointer to the
+setup doc instead of erroring. Disable for a run with `--no-spotify`.
 
 ### Markdown long-term memory
 
@@ -238,6 +270,9 @@ py -3.13 -m jarvis --demo-overlay
 | `PICOVOICE_ACCESS_KEY` | Free Picovoice key → prefer Porcupine (`jarvis`) |
 | `JARVIS_GOOGLE_CLIENT_SECRETS` | Path to Google OAuth Desktop client JSON |
 | `JARVIS_GOOGLE_TOKEN` | Override path for stored OAuth tokens |
+| `JARVIS_SPOTIFY_CLIENT_ID` | Spotify developer-app client ID (or settings.json) |
+| `JARVIS_SPOTIFY_TOKEN` | Override path for stored Spotify tokens |
+| `JARVIS_SPOTIFY_PORT` | Loopback port for `--spotify-login` (default `8898`) |
 | `JARVIS_MEMORY_DIR` | Markdown memory root (default `~/.jarvis/memory`; tokens are *never* stored here) |
 | `JARVIS_HOME` | Root for settings + audit log (default `%USERPROFILE%\.jarvis`) |
 | `JARVIS_SETTINGS` | Override path to `settings.json` |
@@ -289,6 +324,10 @@ model** — raw text goes straight to the brain.
   `--permission-mode acceptEdits`. Destructive / system / outward commands hit
   an ask-first gate (voice yes/no + overlay Yes/No); secrets stay hard-denied.
   Post-confirm execution is foreground in v1 (no second long-task "On it." race).
+- **Spotify (issue 09):** play/pause/skip/named-play/now-playing/volume
+  intents route to the Spotify Web API (PKCE tokens, auto-refresh) before
+  the brain. Unconfigured → spoken pointer to `docs/spotify-setup.md`;
+  no active device / Premium-only → plain spoken sentences.
 - **Markdown memory (issue 07):** remember / recall / forget intents are
   answered locally from dated+tagged notes under `~/.jarvis/memory`
   (before Google and the brain; works offline). A digest of the notes is

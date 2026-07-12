@@ -12,3 +12,4 @@ scratchpad/overlay_shots/
 .env
 *.log
 .jarvis/
+.claude/worktrees/
