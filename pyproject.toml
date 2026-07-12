@@ -58,6 +58,9 @@ include = ["jarvis*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# os_smoke is deselected automatically; run it on demand: pytest -m os_smoke
+addopts = "-m \"not os_smoke\""
 markers = [
     "smoke: optional real Claude CLI smoke tests (skipped by default)",
+    "os_smoke: opt-in real-OS adapter smoke tests (launches Notepad / opens media for real); run with: pytest -m os_smoke",
 ]

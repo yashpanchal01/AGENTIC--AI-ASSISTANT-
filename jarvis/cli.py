@@ -212,15 +212,32 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def make_brain(config: JarvisConfig, *, fake: bool = False, provider: str | None = None):
-    """Build the configured brain. Default provider is Grok (see JARVIS_BRAIN)."""
+def make_brain(
+    config: JarvisConfig,
+    *,
+    fake: bool = False,
+    provider: str | None = None,
+    bus=None,
+):
+    """Build the configured brain. Default provider is Grok (see JARVIS_BRAIN).
+
+    With *bus* (issue 12), cloud brains stream live StepStarted/StepFinished/
+    TokenTick events during each call and BrainSelected announces the provider.
+    """
     name = (provider or config.brain_provider or "grok").strip().lower()
     if fake or name == "fake":
-        return FakeBrain()
-    if name == "claude":
-        return ClaudeCodeBrain(config=config)
-    # Default / "grok"
-    return GrokCliBrain(config=config)
+        name = "fake"
+        brain = FakeBrain()
+    elif name == "claude":
+        brain = ClaudeCodeBrain(config=config, bus=bus)
+    else:
+        name = "grok"
+        brain = GrokCliBrain(config=config, bus=bus)
+    if bus is not None:
+        from jarvis.events import BrainSelected
+
+        bus.publish(BrainSelected(provider=name))
+    return brain
 
 
 def make_speaker(config: JarvisConfig, *, no_speak: bool):
@@ -288,6 +305,27 @@ def make_spotify(config: JarvisConfig, *, fake_spotify: bool, no_spotify: bool):
     from jarvis.spotify.controller import build_spotify
 
     return build_spotify(config, force_fake=fake_spotify)
+
+
+def make_media(config: JarvisConfig):
+    """Local media: search approved folders and open with the OS default player."""
+    from jarvis.media.handler import build_local_media
+
+    return build_local_media(config)
+
+
+def make_windows():
+    """Win32 window control (focus / min / max / fullscreen / close)."""
+    from jarvis.windows.handler import build_window_handler
+
+    return build_window_handler()
+
+
+def make_apps():
+    """Smart app open: focus if running, else launch once."""
+    from jarvis.apps.handler import build_app_handler
+
+    return build_app_handler()
 
 
 def make_memory(config: JarvisConfig, *, no_memory: bool = False):
@@ -377,6 +415,9 @@ def run_once(
     google=None,
     memory=None,
     spotify=None,
+    media=None,
+    windows=None,
+    apps=None,
     connectivity=None,
     long_tasks=None,
     confirmer=None,
@@ -396,6 +437,9 @@ def run_once(
             google=google,
             memory=memory,
             spotify=spotify,
+            media=media,
+            windows=windows,
+            apps=apps,
             connectivity=connectivity,
             long_tasks=long_tasks,
             confirmer=confirmer,
@@ -410,6 +454,9 @@ def run_once(
             google=google,
             memory=memory,
             spotify=spotify,
+            media=media,
+            windows=windows,
+            apps=apps,
             connectivity=connectivity,
             long_tasks=long_tasks,
             confirmer=confirmer,
@@ -417,6 +464,18 @@ def run_once(
             audit=audit,
         )
     _print_result(result)
+    # --once used to return on "On it." and exit the process, which killed the
+    # background brain worker mid-task (e.g. find+play movie never finished).
+    # Wait for the worker so one-shot CLI matches daemon behavior.
+    if getattr(result, "backgrounded", False) and long_tasks is not None:
+        wait_fn = getattr(long_tasks, "wait", None)
+        if callable(wait_fn):
+            print("JARVIS> (waiting for background task…)", flush=True)
+            wait_fn(timeout=600.0)
+            final = getattr(long_tasks, "last_final", None)
+            if final is not None:
+                _print_result(final)
+                return 0 if final.ok else 1
     return 0 if result.ok else 1
 
 
@@ -467,6 +526,9 @@ def run_listen(
     google=None,
     memory=None,
     spotify=None,
+    media=None,
+    windows=None,
+    apps=None,
     connectivity=None,
     long_tasks=None,
     confirmer=None,
@@ -496,6 +558,9 @@ def run_listen(
                 google=google,
                 memory=memory,
                 spotify=spotify,
+                media=media,
+                windows=windows,
+                apps=apps,
                 connectivity=connectivity,
                 long_tasks=long_tasks,
                 confirmer=confirmer,
@@ -512,6 +577,9 @@ def run_listen(
                 google=google,
                 memory=memory,
                 spotify=spotify,
+                media=media,
+                windows=windows,
+                apps=apps,
                 connectivity=connectivity,
                 long_tasks=long_tasks,
                 confirmer=confirmer,
@@ -536,7 +604,17 @@ def run_listen(
     print(f"You (voice)> {outcome.transcript}")
     assert outcome.command is not None
     _print_result(outcome.command)
-    return 0 if outcome.command.ok else 1
+    result = outcome.command
+    if getattr(result, "backgrounded", False) and long_tasks is not None:
+        wait_fn = getattr(long_tasks, "wait", None)
+        if callable(wait_fn):
+            print("JARVIS> (waiting for background task…)", flush=True)
+            wait_fn(timeout=600.0)
+            final = getattr(long_tasks, "last_final", None)
+            if final is not None:
+                _print_result(final)
+                return 0 if final.ok else 1
+    return 0 if result.ok else 1
 
 
 def run_daemon(
@@ -551,6 +629,9 @@ def run_daemon(
     google=None,
     memory=None,
     spotify=None,
+    media=None,
+    windows=None,
+    apps=None,
     connectivity=None,
     long_tasks=None,
     confirmer=None,
@@ -600,6 +681,9 @@ def run_daemon(
         google=google,
         memory=memory,
         spotify=spotify,
+        media=media,
+        windows=windows,
+        apps=apps,
         long_tasks=long_tasks,
         confirmer=confirmer,
         hotkey=config.hotkey,
@@ -671,6 +755,9 @@ def run_repl(
     google=None,
     memory=None,
     spotify=None,
+    media=None,
+    windows=None,
+    apps=None,
     connectivity=None,
     long_tasks=None,
     audit=None,
@@ -708,6 +795,19 @@ def run_repl(
         print(f"  spotify: {state} ({type(spotify).__name__})")
     else:
         print("  spotify: off")
+    if media is not None:
+        n = len(getattr(media, "roots", ()) or ())
+        print(f"  media: local open ({n} folder(s))")
+    else:
+        print("  media: off")
+    if windows is not None:
+        print("  windows: Win32 control on")
+    else:
+        print("  windows: off")
+    if apps is not None:
+        print("  apps: smart open (focus if running)")
+    else:
+        print("  apps: off")
     print()
 
     # Lazy STT — only load whisper when the user actually listens.
@@ -752,6 +852,9 @@ def run_repl(
                 google=google,
                 memory=memory,
                 spotify=spotify,
+                media=media,
+                windows=windows,
+                apps=apps,
                 connectivity=connectivity,
                 long_tasks=long_tasks,
                 unload_stt_after=config.unload_stt_between_commands,
@@ -767,6 +870,9 @@ def run_repl(
             google=google,
             memory=memory,
             spotify=spotify,
+            media=media,
+            windows=windows,
+            apps=apps,
             connectivity=connectivity,
             long_tasks=long_tasks,
             confirmer=make_confirmer(interactive=True),
@@ -807,12 +913,17 @@ def _run_with_qt_overlay(
     resident=None,
     enable_tray: bool = False,
     use_overlay: bool = True,
+    bus=None,
 ) -> int:
     """Run *work(overlay)* on a worker thread while the Qt event loop paints.
 
     When *enable_tray* is True, shows a system tray icon bound to *resident*
     (Pause / Resume / Quit). Quit from the tray stops the resident controller
     and exits the Qt loop.
+
+    With *bus* (issue 12), Aurora is attached as a bus subscriber and the
+    pipeline receives a BusOverlay front — same set_state sequence, but other
+    subscribers (audit, future SPINE) observe the identical event stream.
     """
     try:
         from PySide6 import QtCore, QtWidgets
@@ -825,10 +936,17 @@ def _run_with_qt_overlay(
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
     overlay = None
+    overlay_front = None
     if use_overlay:
         from jarvis.overlay.aurora import AuroraOverlay
 
         overlay = AuroraOverlay()
+        overlay_front = overlay
+        if bus is not None:
+            from jarvis.overlay.bus import BusOverlay, attach_overlay
+
+            attach_overlay(bus, overlay)
+            overlay_front = BusOverlay(bus, overlay)
     result_box: dict[str, int] = {"code": 1}
     tray = None
 
@@ -861,7 +979,7 @@ def _run_with_qt_overlay(
 
     def runner() -> None:
         try:
-            result_box["code"] = int(work(overlay))
+            result_box["code"] = int(work(overlay_front))
         except Exception as exc:  # noqa: BLE001 — surface to console, quit UI
             print(f"JARVIS> overlay session error: {exc}", file=sys.stderr)
             result_box["code"] = 2
@@ -1001,7 +1119,15 @@ def main(argv: list[str] | None = None) -> int:
 
         return run_overlay_demo()
 
-    brain = make_brain(config, fake=args.fake, provider=config.brain_provider)
+    # In-process event bus (issue 12): brains stream live tool steps, the
+    # overlay and audit log ride it as subscribers.
+    from jarvis.events import EventBus
+
+    bus = EventBus()
+
+    brain = make_brain(
+        config, fake=args.fake, provider=config.brain_provider, bus=bus
+    )
     speaker = make_speaker(config, no_speak=args.no_speak)
     use_overlay = _want_overlay(args)
     use_tray = _want_tray(args)
@@ -1015,11 +1141,21 @@ def main(argv: list[str] | None = None) -> int:
     spotify = make_spotify(
         config, fake_spotify=use_fake_spotify, no_spotify=args.no_spotify
     )
+    media = make_media(config)
+    windows = make_windows()
+    apps = make_apps()
     # Markdown long-term memory is local and works with every brain (incl. fake).
     memory = make_memory(config, no_memory=args.no_memory)
     # Fake brain needs no network; skip connectivity pre-check so offline demos work.
     connectivity = None if use_fake else make_connectivity(config)
     audit = _make_audit(args)
+    if audit is not None:
+        # Audit becomes a bus subscriber (issue 12): call sites log through the
+        # bus; the real JSONL writer subscribes — records byte-identical.
+        from jarvis.audit import BusAuditor, attach_audit
+
+        attach_audit(bus, audit)
+        audit = BusAuditor(bus)
     # Shared across daemon cycles / REPL turns so "cancel" aborts in-flight work.
     long_tasks = LongTaskService(
         threshold_s=config.long_task_threshold_s, audit=audit
@@ -1087,6 +1223,9 @@ def main(argv: list[str] | None = None) -> int:
                 google=google,
                 memory=memory,
                 spotify=spotify,
+                media=media,
+                windows=windows,
+                apps=apps,
                 connectivity=connectivity,
                 long_tasks=long_tasks,
                 max_cycles=args.max_cycles,
@@ -1104,6 +1243,7 @@ def main(argv: list[str] | None = None) -> int:
                 resident=resident,
                 enable_tray=use_tray,
                 use_overlay=use_overlay,
+                bus=bus,
             )
         return _daemon_work(None)
 
@@ -1130,12 +1270,16 @@ def main(argv: list[str] | None = None) -> int:
                     google=google,
                     memory=memory,
                     spotify=spotify,
+                    media=media,
+                    windows=windows,
+                    apps=apps,
                     connectivity=connectivity,
                     long_tasks=long_tasks,
                     unload_stt_after=config.unload_stt_between_commands,
                     long_task_threshold_s=config.long_task_threshold_s,
                     audit=audit,
-                )
+                ),
+                bus=bus,
             )
         return run_listen(
             brain=brain,
@@ -1146,6 +1290,9 @@ def main(argv: list[str] | None = None) -> int:
             google=google,
             memory=memory,
             spotify=spotify,
+            media=media,
+            windows=windows,
+            apps=apps,
             connectivity=connectivity,
             long_tasks=long_tasks,
             unload_stt_after=config.unload_stt_between_commands,
@@ -1164,11 +1311,15 @@ def main(argv: list[str] | None = None) -> int:
                     google=google,
                     memory=memory,
                     spotify=spotify,
+                    media=media,
+                    windows=windows,
+                    apps=apps,
                     connectivity=connectivity,
                     long_tasks=long_tasks,
                     long_task_threshold_s=config.long_task_threshold_s,
                     audit=audit,
-                )
+                ),
+                bus=bus,
             )
         return run_once(
             args.once,
@@ -1177,6 +1328,9 @@ def main(argv: list[str] | None = None) -> int:
             google=google,
             memory=memory,
             spotify=spotify,
+            media=media,
+            windows=windows,
+            apps=apps,
             connectivity=connectivity,
             long_tasks=long_tasks,
             long_task_threshold_s=config.long_task_threshold_s,
@@ -1199,6 +1353,9 @@ def main(argv: list[str] | None = None) -> int:
         google=google,
         memory=memory,
         spotify=spotify,
+        media=media,
+        windows=windows,
+        apps=apps,
         connectivity=connectivity,
         long_tasks=long_tasks,
         audit=audit,

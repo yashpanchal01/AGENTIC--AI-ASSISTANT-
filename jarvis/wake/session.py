@@ -68,6 +68,9 @@ class FrontDoorSession:
     google: Any = None
     memory: Any = None
     spotify: Any = None
+    media: Any = None
+    windows: Any = None
+    apps: Any = None
     long_tasks: LongTaskService | None = None
     confirmer: Any = None
     wake_phrases: tuple[str, ...] = DEFAULT_WAKE_PHRASES
@@ -217,6 +220,9 @@ class FrontDoorSession:
             "google": self.google,
             "memory": self.memory,
             "spotify": self.spotify,
+            "media": self.media,
+            "windows": self.windows,
+            "apps": self.apps,
             "long_tasks": self.long_tasks,
             "confirmer": self.confirmer,
             "wake_phrases": self.wake_phrases,

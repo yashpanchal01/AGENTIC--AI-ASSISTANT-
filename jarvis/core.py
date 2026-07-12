@@ -60,6 +60,27 @@ class SpotifyHandler(Protocol):
     def try_handle(self, utterance: str) -> object | None: ...
 
 
+@runtime_checkable
+class LocalMediaHandler(Protocol):
+    """Optional local media seam: find a file on disk and open it for real."""
+
+    def try_handle(self, utterance: str) -> object | None: ...
+
+
+@runtime_checkable
+class WindowHandler(Protocol):
+    """Optional Win32 window control (focus / min / max / fullscreen / close)."""
+
+    def try_handle(self, utterance: str) -> object | None: ...
+
+
+@runtime_checkable
+class AppHandler(Protocol):
+    """Optional smart app open: focus if running, else launch once."""
+
+    def try_handle(self, utterance: str) -> object | None: ...
+
+
 @dataclass(frozen=True)
 class CommandResult:
     """Observable outcome of one handle_command call."""
@@ -82,6 +103,9 @@ def handle_command(
     google: GoogleHandler | None = None,
     memory: MemoryHandler | None = None,
     spotify: SpotifyHandler | None = None,
+    media: LocalMediaHandler | None = None,
+    windows: WindowHandler | None = None,
+    apps: AppHandler | None = None,
     connectivity: Connectivity | None = None,
     long_tasks: LongTaskService | None = None,
     overlay: Overlay | None = None,
@@ -90,7 +114,7 @@ def handle_command(
     long_task_threshold_s: float | None = None,
     audit: Any = None,
 ) -> CommandResult:
-    """Run one command through memory / Google / Spotify (if matched) or the brain, then speak.
+    """Run one command through memory / Google / media / Spotify (if matched) or the brain, then speak.
 
     Automated test seam (PRD): inject FakeBrain + optional sample_workspace and
     assert on reply text + actions taken.
@@ -105,6 +129,19 @@ def handle_command(
     now-playing / volume — are routed to the Spotify controller before the
     brain. If Spotify isn't configured, the reply is a short spoken pointer to
     docs/spotify-setup.md instead of an error.
+
+    Local media: when *media* is provided, “find X in Downloads and play it” /
+    “play the movie X” / ambiguous “play X” that matches a local media file are
+    handled by a real OS open (os.startfile) — never delegated to the brain so
+    a model cannot claim success without launching the file. Say “fullscreen”
+    with the play command to also fullscreen the player after launch.
+
+    Window control: when *windows* is provided, “fullscreen VLC”, “minimize
+    chrome”, “focus notepad”, etc. use the Win32 API (not the brain).
+
+    Smart apps: when *apps* is provided, “open brave” focuses an existing
+    Brave window if one is running; only launches if nothing is open. Say
+    “open a new brave window” to force another instance.
 
     Failures are always spoken in plain language (never silent, never a stack
     trace). When *connectivity* reports offline, the cloud brain is not called
@@ -265,6 +302,67 @@ def handle_command(
                 result = _finish_handler(g_result, speaker=speaker)
                 _audit_result(audit, result, path="google")
                 return result
+
+    # Smart app open before media/brain: focus existing window, else launch once.
+    if apps is not None:
+        try:
+            a_result = apps.try_handle(text)
+        except Exception as exc:  # noqa: BLE001 — boundary
+            reply = "Something went wrong opening that app."
+            speaker.speak(reply)
+            result = CommandResult(
+                reply=reply,
+                actions=(),
+                ok=False,
+                error=type(exc).__name__,
+            )
+            _audit_result(audit, result, path="apps")
+            return result
+        if a_result is not None:
+            result = _finish_handler(a_result, speaker=speaker)
+            _audit_result(audit, result, path="apps")
+            return result
+
+    # Local media before Spotify/brain: real disk search + OS open. Offline-safe.
+    # Music-shaped utterances return None so Spotify still owns playlists/skip.
+    if media is not None:
+        try:
+            m_media = media.try_handle(text)
+        except Exception as exc:  # noqa: BLE001 — boundary: never crash the REPL
+            reply = "Something went wrong opening that media file."
+            speaker.speak(reply)
+            result = CommandResult(
+                reply=reply,
+                actions=(),
+                ok=False,
+                error=type(exc).__name__,
+            )
+            _audit_result(audit, result, path="media")
+            return result
+        if m_media is not None:
+            result = _finish_handler(m_media, speaker=speaker)
+            _audit_result(audit, result, path="media")
+            return result
+
+    # Win32 window control (focus / min / max / fullscreen / close). Offline-safe.
+    if windows is not None:
+        try:
+            w_result = windows.try_handle(text)
+        except Exception as exc:  # noqa: BLE001 — boundary
+            reply = "Something went wrong controlling that window."
+            speaker.speak(reply)
+            result = CommandResult(
+                reply=reply,
+                actions=(),
+                ok=False,
+                error=type(exc).__name__,
+            )
+            _audit_result(audit, result, path="windows")
+            return result
+        if w_result is not None:
+            result = _finish_handler(w_result, speaker=speaker)
+            _audit_result(audit, result, path="windows")
+            return result
 
     # Spotify playback before the brain (issue 09). Live control needs the
     # network; setup pointers ("not configured" / "not signed in") are local,

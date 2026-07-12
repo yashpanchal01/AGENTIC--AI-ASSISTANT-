@@ -35,6 +35,8 @@ JARVIS_SYSTEM_PROMPT = (
     "reply, forward email or create calendar events. "
     "Spotify playback (play, pause, skip, now playing, volume) is handled by "
     "JARVIS itself; do not try to control music yourself. "
+    "Playing local media files from Downloads/Desktop/Documents/Videos is also "
+    "handled by JARVIS itself; do not invent success for file opens. "
     "When something fails (file not found, app missing, tool error), explain in "
     "one short plain sentence what went wrong and why — never fail silently and "
     "never return a stack trace. "
@@ -102,16 +104,9 @@ class JarvisConfig:
     grok_bin: str = "grok"
     # Empty model → Grok CLI default (SuperGrok session). Set JARVIS_GROK_MODEL to pin.
     grok_model: str = ""
-    # Grok headless tool allowlist (tool IDs, not Claude names).
-    grok_safe_tools: tuple[str, ...] = (
-        "run_terminal_cmd",
-        "read_file",
-        "list_dir",
-        "grep",
-        "search_replace",
-        "web_search",
-        "web_fetch",
-    )
+    # NOTE: the Grok tool allowlist lives in exactly one place —
+    # jarvis.brain.grok_cli.DEFAULT_GROK_SAFE_TOOLS (the dead grok_safe_tools
+    # key was removed in issue 13; stale settings.json keys are ignored).
     permission_mode: str = "acceptEdits"
     system_prompt: str = JARVIS_SYSTEM_PROMPT
     cwd: Path = field(default_factory=Path.cwd)

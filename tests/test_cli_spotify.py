@@ -41,10 +41,13 @@ def test_no_spotify_falls_through_to_brain(capsys) -> None:
 
 
 def test_open_spotify_is_an_app_launch_not_playback(capsys) -> None:
+    # Hermetic app ops (conftest): nothing "running" → smart-open launches.
+    # Previously this hit the real Win32 window list and flip-flopped between
+    # app_focus/app_launch depending on whether Spotify was open on the machine.
     code = main(["--fake", "--no-speak", "--once", "open spotify"])
     captured = capsys.readouterr()
     assert code == 0
-    assert "launch_app" in captured.out
+    assert "app_launch" in captured.out
     assert "spotify_play" not in captured.out
 
 

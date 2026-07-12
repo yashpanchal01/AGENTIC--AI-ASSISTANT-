@@ -108,3 +108,25 @@ def test_invalid_json_yields_empty(tmp_path: Path, capsys) -> None:
     err = capsys.readouterr().err
     assert "invalid JSON" in err
     assert str(path) in err
+
+
+def test_stale_grok_safe_tools_key_still_loads(tmp_path: Path) -> None:
+    """The dead grok_safe_tools config key was removed (issue 13); existing
+    settings files that still carry it must load without error."""
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "hotkey": "ctrl+alt+j",
+                "grok_safe_tools": ["run_terminal_cmd", "read_file"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    s = load_settings(path)
+    assert s.hotkey == "ctrl+alt+j"
+
+    cfg = apply_user_settings(JarvisConfig(), s)
+    assert cfg.hotkey == "ctrl+alt+j"
+    # The key is gone from config — stale settings entries are simply ignored.
+    assert not hasattr(cfg, "grok_safe_tools")
