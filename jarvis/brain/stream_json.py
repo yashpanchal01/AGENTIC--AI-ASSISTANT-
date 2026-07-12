@@ -1,14 +1,28 @@
 """Parse Claude Code headless stream-json event lines into a BrainTurn.
 
 Kept pure so fixtures from real CLI runs can drive tests without network.
+
+Live step streaming (issue 12): pass ``on_event`` to receive typed
+:mod:`jarvis.events` objects (StepStarted / StepFinished / StepFailed /
+TokenTick / TaskCompleted) *as each line is ingested* — the Claude brain feeds
+lines during the CLI call so subscribers see tool steps while they run, not a
+summary afterwards. Without ``on_event`` parsing stays exactly as before.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
+from jarvis.events import (
+    StepFailed,
+    StepFinished,
+    StepStarted,
+    TaskCompleted,
+    TokenTick,
+)
 from jarvis.types import Action, BrainTurn
 
 
@@ -20,6 +34,10 @@ class StreamParseState:
     denied: bool = False
     ok: bool = True
     error: str | None = None
+    # Optional live observer (issue 12): called once per emitted event.
+    on_event: Callable[[object], None] | None = None
+    # tool_use id → (name, detail) so tool_result can close the right step.
+    _pending_steps: dict[str, tuple[str, str]] = field(default_factory=dict)
 
     def ingest(self, event: dict[str, Any]) -> None:
         if sid := event.get("session_id"):
@@ -39,6 +57,17 @@ class StreamParseState:
                     self.actions.append(
                         Action(name=name, detail=detail, meta={"input": inp})
                     )
+                    step_id = block.get("id")
+                    step_id = str(step_id) if step_id else None
+                    if step_id:
+                        self._pending_steps[step_id] = (name, detail)
+                    self._emit(
+                        StepStarted(name=name, detail=detail, step_id=step_id)
+                    )
+                elif block.get("type") == "text":
+                    text = block.get("text")
+                    if isinstance(text, str) and text:
+                        self._emit(TokenTick(text=text))
 
         elif etype == "user":
             message = event.get("message") or {}
@@ -51,6 +80,26 @@ class StreamParseState:
                         text = _block_text(block)
                         if _looks_denied(text):
                             self.denied = True
+                        step_id = block.get("tool_use_id")
+                        step_id = str(step_id) if step_id else None
+                        name, detail = self._pending_steps.pop(
+                            step_id or "", ("tool", "")
+                        )
+                        if bool(block.get("is_error")) or _looks_denied(text):
+                            self._emit(
+                                StepFailed(
+                                    name=name,
+                                    detail=detail,
+                                    step_id=step_id,
+                                    error=text[:200],
+                                )
+                            )
+                        else:
+                            self._emit(
+                                StepFinished(
+                                    name=name, detail=detail, step_id=step_id
+                                )
+                            )
 
         elif etype == "result":
             subtype = event.get("subtype")
@@ -73,6 +122,18 @@ class StreamParseState:
             ):
                 self.ok = False
                 self.error = self.error or "rate_limited"
+            self._emit(
+                TaskCompleted(reply=self.result_text, ok=self.ok, error=self.error)
+            )
+
+    def _emit(self, event: object) -> None:
+        """Hand *event* to the observer; a broken observer never breaks parsing."""
+        if self.on_event is None:
+            return
+        try:
+            self.on_event(event)
+        except Exception:  # noqa: BLE001 — observer isolation
+            pass
 
     def to_turn(self) -> BrainTurn:
         return BrainTurn(
@@ -85,19 +146,36 @@ class StreamParseState:
         )
 
 
-def parse_stream_json_lines(lines: Iterable[str]) -> BrainTurn:
-    """Parse newline-delimited stream-json events into a BrainTurn."""
-    state = StreamParseState()
+def feed_stream_json_line(state: StreamParseState, raw: str) -> None:
+    """Ingest one raw stream-json line into *state* (malformed lines skipped).
+
+    This is the live path (issue 12): the Claude brain calls it per line while
+    the CLI is still running so ``state.on_event`` fires during the call.
+    """
+    line = (raw or "").strip()
+    if not line:
+        return
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return
+    if isinstance(event, dict):
+        state.ingest(event)
+
+
+def parse_stream_json_lines(
+    lines: Iterable[str],
+    *,
+    on_event: Callable[[object], None] | None = None,
+) -> BrainTurn:
+    """Parse newline-delimited stream-json events into a BrainTurn.
+
+    Pass ``on_event`` to observe typed step events per ingested line
+    (fixture replays in tests use this to assert exact event sequences).
+    """
+    state = StreamParseState(on_event=on_event)
     for raw in lines:
-        line = raw.strip()
-        if not line:
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(event, dict):
-            state.ingest(event)
+        feed_stream_json_line(state, raw)
     return state.to_turn()
 
 

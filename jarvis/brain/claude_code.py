@@ -13,8 +13,9 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
-from jarvis.brain.stream_json import parse_stream_json_lines
+from jarvis.brain.stream_json import StreamParseState, feed_stream_json_line
 from jarvis.config import DEFAULT_SAFE_TOOLS, JARVIS_SYSTEM_PROMPT, JarvisConfig
 from jarvis.confirm import (
     confirmation_prompt,
@@ -39,6 +40,8 @@ class ClaudeCodeBrain:
 
     config: JarvisConfig = field(default_factory=JarvisConfig)
     session_id: str | None = None
+    # Optional EventBus (issue 12): tool steps stream live during the call.
+    bus: Any = None
     _claude_bin: str | None = field(default=None, init=False, repr=False)
     _proc: subprocess.Popen[str] | None = field(default=None, init=False, repr=False)
     _proc_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
@@ -110,23 +113,47 @@ class ClaudeCodeBrain:
         with self._proc_lock:
             self._proc = proc
 
-        # Drain pipes on a helper thread so a full stdout buffer cannot deadlock.
-        io_box: dict[str, str | None] = {"stdout": None, "stderr": None}
+        # Drain pipes on helper threads so a full buffer cannot deadlock
+        # (communicate() used the same two internal readers). stdout is parsed
+        # line-by-line so step events reach the bus DURING the call (issue 12),
+        # not summarized after it returns.
+        state = StreamParseState(
+            on_event=self._publish if self.bus is not None else None
+        )
+        io_box: dict[str, str | None] = {"stderr": None}
 
-        def _drain() -> None:
-            out, err = proc.communicate()
-            io_box["stdout"] = out
-            io_box["stderr"] = err
+        def _drain_stdout() -> None:
+            try:
+                assert proc.stdout is not None
+                for raw in proc.stdout:
+                    feed_stream_json_line(state, raw)
+            except Exception:  # noqa: BLE001 — pipe torn down on kill/cancel
+                pass
 
-        reader = threading.Thread(target=_drain, name="claude-io", daemon=True)
-        reader.start()
+        def _drain_stderr() -> None:
+            try:
+                assert proc.stderr is not None
+                io_box["stderr"] = proc.stderr.read()
+            except Exception:  # noqa: BLE001 — pipe torn down on kill/cancel
+                io_box["stderr"] = ""
+
+        readers = (
+            threading.Thread(target=_drain_stdout, name="claude-io-out", daemon=True),
+            threading.Thread(target=_drain_stderr, name="claude-io-err", daemon=True),
+        )
+        for reader in readers:
+            reader.start()
+
+        def _io_pending() -> bool:
+            return any(r.is_alive() for r in readers) or proc.poll() is None
 
         try:
             deadline = time.monotonic() + 300
-            while reader.is_alive():
+            while _io_pending():
                 if self._cancel.is_set():
                     self._kill_proc(proc)
-                    reader.join(timeout=2)
+                    for reader in readers:
+                        reader.join(timeout=2)
                     return BrainTurn(
                         reply="Cancelled.",
                         ok=False,
@@ -135,14 +162,24 @@ class ClaudeCodeBrain:
                     )
                 if time.monotonic() >= deadline:
                     self._kill_proc(proc)
-                    reader.join(timeout=2)
+                    for reader in readers:
+                        reader.join(timeout=2)
                     return BrainTurn(
                         reply="That took too long and I had to stop.",
                         ok=False,
                         error="timeout",
                         session_id=self.session_id,
                     )
-                reader.join(timeout=0.05)
+                for reader in readers:
+                    if reader.is_alive():
+                        reader.join(timeout=0.05)
+                        break
+                else:
+                    # Readers done, process still exiting — bounded wait.
+                    try:
+                        proc.wait(timeout=0.05)
+                    except subprocess.TimeoutExpired:
+                        pass
 
             if self._cancel.is_set():
                 return BrainTurn(
@@ -152,10 +189,8 @@ class ClaudeCodeBrain:
                     session_id=self.session_id,
                 )
 
-            stdout = io_box.get("stdout") or ""
             stderr = io_box.get("stderr") or ""
-            lines = stdout.splitlines()
-            turn = parse_stream_json_lines(lines)
+            turn = state.to_turn()
             stderr_s = stderr.strip()
             combined_err = " ".join(
                 p for p in (turn.error or "", turn.reply or "", stderr_s) if p
@@ -233,6 +268,16 @@ class ClaudeCodeBrain:
                     self._proc = None
             # Ready for the next turn (whether cancelled, timed out, or ok).
             self._cancel.clear()
+
+    def _publish(self, event: object) -> None:
+        """Publish a live step event; the bus must never break a brain turn."""
+        bus = self.bus
+        if bus is None:
+            return
+        try:
+            bus.publish(event)
+        except Exception:  # noqa: BLE001 — bus is observability, not control flow
+            pass
 
     @staticmethod
     def _kill_proc(proc: subprocess.Popen[str]) -> None:

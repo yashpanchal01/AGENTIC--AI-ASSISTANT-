@@ -94,6 +94,40 @@ class MemoryAuditLog:
             self.events.append(record)
 
 
+class BusAuditor:
+    """Auditor-shaped publisher: ``log()`` rides the event bus (issue 12).
+
+    Drop-in for AuditLog at every call site; the real writer subscribes via
+    :func:`attach_audit` and produces byte-identical records.
+    """
+
+    def __init__(self, bus: Any) -> None:
+        self._bus = bus
+
+    def log(self, event: str, **details: Any) -> None:
+        from jarvis.events import AuditRecord
+
+        self._bus.publish(AuditRecord(name=event, details=details))
+
+
+class AuditSubscriber:
+    """Maps ``AuditRecord`` events back onto an Auditor (the real writer)."""
+
+    def __init__(self, auditor: Auditor) -> None:
+        self._auditor = auditor
+
+    def __call__(self, event: object) -> None:
+        from jarvis.events import AuditRecord
+
+        if isinstance(event, AuditRecord):
+            self._auditor.log(event.name, **event.details)
+
+
+def attach_audit(bus: Any, auditor: Auditor) -> Any:
+    """Subscribe the real audit writer to *bus*. Returns the unsubscribe."""
+    return bus.subscribe(AuditSubscriber(auditor))
+
+
 def _jsonable(value: Any) -> Any:
     if value is None or isinstance(value, (bool, int, float, str)):
         return value

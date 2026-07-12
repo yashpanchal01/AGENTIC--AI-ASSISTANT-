@@ -14,8 +14,10 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from jarvis.config import JARVIS_SYSTEM_PROMPT, JarvisConfig
+from jarvis.events import StepFinished, StepStarted
 from jarvis.confirm import (
     confirmation_prompt,
     describe_risky_action,
@@ -48,6 +50,10 @@ class GrokCliBrain:
 
     config: JarvisConfig = field(default_factory=JarvisConfig)
     session_id: str | None = None
+    # Optional EventBus (issue 12): StepStarted/StepFinished per reported tool
+    # call. Grok's JSON arrives at end-of-run, so steps are emitted as soon as
+    # the payload is parsed (Grok reports tools post-hoc, unlike Claude).
+    bus: Any = None
     _grok_bin: str | None = field(default=None, init=False, repr=False)
     _proc: subprocess.Popen[str] | None = field(default=None, init=False, repr=False)
     _proc_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
@@ -159,6 +165,7 @@ class GrokCliBrain:
             stdout = io_box.get("stdout") or ""
             stderr = io_box.get("stderr") or ""
             turn = parse_grok_output(stdout)
+            self._publish_steps(turn)
             stderr_s = stderr.strip()
             combined_err = " ".join(
                 p for p in (turn.error or "", turn.reply or "", stderr_s) if p
@@ -221,6 +228,18 @@ class GrokCliBrain:
                 if self._proc is proc:
                     self._proc = None
             self._cancel.clear()
+
+    def _publish_steps(self, turn: BrainTurn) -> None:
+        """Emit StepStarted/StepFinished per tool call Grok reported (issue 12)."""
+        bus = self.bus
+        if bus is None:
+            return
+        for action in turn.actions:
+            try:
+                bus.publish(StepStarted(name=action.name, detail=action.detail))
+                bus.publish(StepFinished(name=action.name, detail=action.detail))
+            except Exception:  # noqa: BLE001 — bus must never break a turn
+                pass
 
     @staticmethod
     def _kill_proc(proc: subprocess.Popen[str]) -> None:
