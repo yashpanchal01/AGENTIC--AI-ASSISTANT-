@@ -144,6 +144,87 @@ def test_notepad_launch_snap_minimize_restore_close() -> None:
                 _force_kill(pid)
 
 
+def test_brightness_set_and_restore_real_wmi() -> None:
+    """Really drive WMI brightness on this laptop, then RESTORE the original.
+
+    Captures the current brightness first, nudges it to a mild test value,
+    asserts it took, then puts it back — never leaves the screen at 0/dim.
+    Skips (not fails) on a panel/desktop where WMI brightness is unsupported.
+    """
+    from jarvis.system.brightness import (
+        BrightnessError,
+        default_get_brightness,
+        default_set_brightness,
+    )
+
+    try:
+        original = default_get_brightness()
+    except BrightnessError as exc:
+        pytest.skip(f"WMI brightness unsupported on this device: {exc}")
+
+    # A mild, always-visible target away from the current value (never 0).
+    target = 40 if abs(original - 40) >= 10 else 70
+    try:
+        default_set_brightness(target)
+        time.sleep(0.6)
+        got = default_get_brightness()
+        # Some panels quantize to coarse steps — accept a small tolerance.
+        assert abs(got - target) <= 10, f"set {target}, read back {got}"
+    finally:
+        # ALWAYS restore the user's original brightness.
+        default_set_brightness(original)
+
+
+def test_latest_capture_open_for_real_then_close(tmp_path: Path) -> None:
+    """Resolve+open the newest file in a TEMP capture folder, then close it."""
+    from jarvis.system.handler import SystemHandler
+    from jarvis.windows.win32api import PLAYER_PROCESSES, close, find_windows
+
+    stem = f"jarvis capture smoke {os.getpid()}"
+    older = tmp_path / f"{stem} old.mp4"
+    newest = tmp_path / f"{stem} new.mp4"
+    # Small media files; the newest gets a later mtime so the resolver picks it.
+    _write_silent_wav(older)
+    time.sleep(1.1)
+    _write_silent_wav(newest)
+
+    players_before = {p: _hwnds(p) for p in PLAYER_PROCESSES}
+    handler = SystemHandler(capture_roots=(tmp_path,))
+    new_hwnd: int | None = None
+    new_proc: str | None = None
+    try:
+        result = handler.try_handle("open the last screen recording")
+        assert result is not None and result.ok, result
+        opened = [a for a in result.actions if a.name == "latest_capture_open"]
+        assert opened and str(newest) in opened[0].detail, result.actions
+
+        def _find_new_player():
+            nonlocal new_hwnd, new_proc
+            for proc in PLAYER_PROCESSES:
+                fresh = _hwnds(proc) - players_before[proc]
+                if fresh:
+                    new_hwnd, new_proc = fresh.pop(), proc
+                    return True
+            for w in find_windows(title_substr=stem):
+                new_hwnd, new_proc = w.hwnd, w.process
+                return True
+            return False
+
+        assert _wait_until(_find_new_player, 20.0), (
+            "no player window appeared after opening the newest capture"
+        )
+        assert new_hwnd is not None
+        close(new_hwnd)
+        new_hwnd = None
+    finally:
+        if new_hwnd is not None:
+            pid = _pid_of(new_hwnd, new_proc or "")
+            close(new_hwnd)
+            time.sleep(1.0)
+            if pid and new_proc and new_hwnd in _hwnds(new_proc):
+                _force_kill(pid)
+
+
 def _write_silent_wav(path: Path, seconds: float = 1.0) -> None:
     with wave.open(str(path), "wb") as fh:
         fh.setnchannels(1)

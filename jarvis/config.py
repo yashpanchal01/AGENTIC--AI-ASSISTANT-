@@ -44,7 +44,8 @@ JARVIS_SYSTEM_PROMPT = (
 CLAUDE_TOOL_BRIDGE_GUIDANCE = (
     "You have JARVIS's own tools for these domains: spotify (music playback), "
     "apps (open/focus a desktop app), windows (focus/minimize/maximize/snap/close "
-    "a window), media (play a local media file), memory (remember/recall/forget "
+    "a window), media (play a local media file), system (screen brightness + "
+    "open the last screen recording), memory (remember/recall/forget "
     "facts), and google_read (read-only Gmail and Calendar). Prefer these tools "
     "over raw shell commands for those domains — they are more reliable and speak "
     "the reply for you. For a multi-domain request, call them in order (e.g. open "
@@ -72,6 +73,25 @@ def _default_approved_folders() -> tuple[Path, ...]:
         Path.cwd(),
     ]
     return tuple(p for p in candidates if p.exists())
+
+
+def _default_capture_folders() -> tuple[Path, ...]:
+    """Folders scanned for "open the last screen recording" (newest by mtime).
+
+    Override with ``JARVIS_CAPTURE_FOLDERS`` (os.pathsep-separated) or the
+    ``capture_folders`` settings key. Defaults to the Windows Game Bar /
+    screen-recording locations under the user's Videos folder.
+    """
+    env = os.environ.get("JARVIS_CAPTURE_FOLDERS")
+    if env:
+        parts = [p.strip() for p in env.split(os.pathsep) if p.strip()]
+        if parts:
+            return tuple(Path(p).expanduser() for p in parts)
+    home = Path.home()
+    return (
+        home / "Videos" / "Captures",
+        home / "Videos",
+    )
 
 
 def _default_piper_model() -> Path | None:
@@ -115,6 +135,8 @@ class JarvisConfig:
     """Runtime config. Override fields or construct from env."""
 
     approved_folders: tuple[Path, ...] = field(default_factory=_default_approved_folders)
+    # Capture folders for "open the last screen recording" (issue 16).
+    capture_folders: tuple[Path, ...] = field(default_factory=_default_capture_folders)
     safe_tools: tuple[str, ...] = DEFAULT_SAFE_TOOLS
     # Brain provider: "grok" (default while Claude limits are tight), "claude", or "fake".
     brain_provider: str = "grok"

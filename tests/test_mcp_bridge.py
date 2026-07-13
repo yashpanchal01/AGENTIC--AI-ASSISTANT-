@@ -65,7 +65,7 @@ def _fake_windows(close_calls: list[int]) -> WindowHandler:
 # --- tool catalogue ---------------------------------------------------------
 
 
-def test_tool_definitions_expose_the_six_domains() -> None:
+def test_tool_definitions_expose_the_domains() -> None:
     defs = tool_definitions()
     names = [d["name"] for d in defs]
     assert names == list(TOOL_NAMES)
@@ -74,6 +74,7 @@ def test_tool_definitions_expose_the_six_domains() -> None:
         "apps",
         "windows",
         "media",
+        "system",
         "memory",
         "google_read",
     }
@@ -154,6 +155,27 @@ def test_handler_exception_maps_to_step_failed() -> None:
     assert res.error == "RuntimeError"
     assert isinstance(events[-1], StepFailed)
     assert events[-1].error == "RuntimeError"
+
+
+def test_dispatch_system_brightness_not_confirm_gated() -> None:
+    """The system tool (issue 16) runs without a confirm prompt (non-destructive)."""
+    from jarvis.system.handler import SystemHandler
+
+    bus, events = _bus_with_log()
+    calls: list[int] = []
+    # A confirmer that would fail the test if the gate ever consulted it.
+    confirmer = FixedConfirmer(answer=False)
+    system = SystemHandler(
+        capture_roots=(), set_brightness=calls.append, open_fn=lambda p: None
+    )
+    bridge = JarvisToolBridge(bus=bus, confirmer=confirmer, system=system)
+
+    res = bridge.call_tool("system", {"command": "set brightness to 50"})
+
+    assert res.is_error is False  # would be cancelled if gated with answer=False
+    assert calls == [50]
+    assert [type(e) for e in events] == [StepStarted, StepFinished]
+    assert events[0].name == "system"
 
 
 def test_google_write_is_refused_read_only() -> None:

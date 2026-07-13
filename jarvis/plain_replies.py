@@ -23,8 +23,11 @@ CANCELLED = "Cancelled."
 NOTHING_TO_CANCEL = "Nothing to cancel."
 STILL_WORKING = "I'm still working on that. Say cancel to stop."
 ALREADY_FINISHED = "That already finished."
+# System controls (issue 16): panels/externals without WMI brightness support.
+BRIGHTNESS_UNSUPPORTED = "I can't change the screen brightness on this display."
 
 _ERROR_REPLIES: dict[str, str] = {
+    "brightness_unsupported": BRIGHTNESS_UNSUPPORTED,
     "brain_unreachable": BRAIN_UNREACHABLE,
     "empty_transcript": EMPTY_TRANSCRIPT,
     "no_speech": NO_SPEECH,

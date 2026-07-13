@@ -99,6 +99,13 @@ _TOOLS: tuple[tuple[str, str], ...] = (
         "'play blade runner fullscreen'.",
     ),
     (
+        "system",
+        "Adjust screen brightness (set an absolute percent, or step up/down) and "
+        "open the most recent capture (e.g. the last screen recording). Prefer "
+        "this over shell. Example: 'set brightness to 50', 'dim brightness to "
+        "zero', 'open the last screen recording'.",
+    ),
+    (
         "memory",
         "The user's long-term memory notes: remember a new fact, recall stored "
         "facts, or forget a note. Example: 'remember that my sister's birthday "
@@ -187,6 +194,7 @@ class JarvisToolBridge:
     apps: Any = None
     windows: Any = None
     media: Any = None
+    system: Any = None
     memory: Any = None
     google: Any = None
 
@@ -209,6 +217,7 @@ class JarvisToolBridge:
             "apps": self.apps,
             "windows": self.windows,
             "media": self.media,
+            "system": self.system,
             "memory": self.memory,
             "google_read": self.google,
         }.get(name)
@@ -355,8 +364,8 @@ class JarvisToolBridge:
                     "serverInfo": {"name": SERVER_NAME, "version": "0.1.0"},
                     "instructions": (
                         "JARVIS's own tools: spotify, apps, windows, media, "
-                        "memory, google_read. Prefer them over shell for those "
-                        "domains. google_read is read-only."
+                        "system, memory, google_read. Prefer them over shell for "
+                        "those domains. google_read is read-only."
                     ),
                 },
             )

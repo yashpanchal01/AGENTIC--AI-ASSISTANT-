@@ -328,6 +328,13 @@ def make_apps():
     return build_app_handler()
 
 
+def make_system(config: JarvisConfig):
+    """System controls: screen brightness + latest-capture resolver (issue 16)."""
+    from jarvis.system.handler import build_system_handler
+
+    return build_system_handler(config)
+
+
 def make_memory(config: JarvisConfig, *, no_memory: bool = False):
     """Markdown long-term memory handler (issue 07), or None when disabled."""
     if no_memory:
@@ -429,6 +436,7 @@ def run_once(
     media=None,
     windows=None,
     apps=None,
+    system=None,
     connectivity=None,
     long_tasks=None,
     confirmer=None,
@@ -452,6 +460,7 @@ def run_once(
             media=media,
             windows=windows,
             apps=apps,
+            system=system,
             connectivity=connectivity,
             long_tasks=long_tasks,
             confirmer=confirmer,
@@ -469,6 +478,7 @@ def run_once(
             media=media,
             windows=windows,
             apps=apps,
+            system=system,
             connectivity=connectivity,
             long_tasks=long_tasks,
             confirmer=confirmer,
@@ -541,6 +551,7 @@ def run_listen(
     media=None,
     windows=None,
     apps=None,
+    system=None,
     connectivity=None,
     long_tasks=None,
     confirmer=None,
@@ -574,6 +585,7 @@ def run_listen(
                 media=media,
                 windows=windows,
                 apps=apps,
+                system=system,
                 connectivity=connectivity,
                 long_tasks=long_tasks,
                 confirmer=confirmer,
@@ -593,6 +605,7 @@ def run_listen(
                 media=media,
                 windows=windows,
                 apps=apps,
+                system=system,
                 connectivity=connectivity,
                 long_tasks=long_tasks,
                 confirmer=confirmer,
@@ -645,6 +658,7 @@ def run_daemon(
     media=None,
     windows=None,
     apps=None,
+    system=None,
     connectivity=None,
     long_tasks=None,
     confirmer=None,
@@ -698,6 +712,7 @@ def run_daemon(
         media=media,
         windows=windows,
         apps=apps,
+        system=system,
         long_tasks=long_tasks,
         confirmer=confirmer,
         hotkey=config.hotkey,
@@ -772,6 +787,7 @@ def run_repl(
     media=None,
     windows=None,
     apps=None,
+    system=None,
     connectivity=None,
     long_tasks=None,
     audit=None,
@@ -872,6 +888,7 @@ def run_repl(
                 media=media,
                 windows=windows,
                 apps=apps,
+                system=system,
                 connectivity=connectivity,
                 long_tasks=long_tasks,
                 unload_stt_after=config.unload_stt_between_commands,
@@ -890,6 +907,7 @@ def run_repl(
             media=media,
             windows=windows,
             apps=apps,
+            system=system,
             connectivity=connectivity,
             long_tasks=long_tasks,
             confirmer=make_confirmer(interactive=True),
@@ -1161,6 +1179,7 @@ def main(argv: list[str] | None = None) -> int:
     media = make_media(config)
     windows = make_windows()
     apps = make_apps()
+    system = make_system(config)
     # Markdown long-term memory is local and works with every brain (incl. fake).
     memory = make_memory(config, no_memory=args.no_memory)
     # MCP tool bridge (issue 15): give the Claude brain JARVIS's own tools over
@@ -1174,6 +1193,7 @@ def main(argv: list[str] | None = None) -> int:
             bus=bus,
             spotify=spotify,
             apps=apps,
+            system=system,
             windows=windows,
             media=media,
             memory=memory,
@@ -1259,6 +1279,7 @@ def main(argv: list[str] | None = None) -> int:
                 media=media,
                 windows=windows,
                 apps=apps,
+                system=system,
                 connectivity=connectivity,
                 long_tasks=long_tasks,
                 max_cycles=args.max_cycles,
@@ -1306,6 +1327,7 @@ def main(argv: list[str] | None = None) -> int:
                     media=media,
                     windows=windows,
                     apps=apps,
+                    system=system,
                     connectivity=connectivity,
                     long_tasks=long_tasks,
                     unload_stt_after=config.unload_stt_between_commands,
@@ -1326,6 +1348,7 @@ def main(argv: list[str] | None = None) -> int:
             media=media,
             windows=windows,
             apps=apps,
+            system=system,
             connectivity=connectivity,
             long_tasks=long_tasks,
             unload_stt_after=config.unload_stt_between_commands,
@@ -1347,6 +1370,7 @@ def main(argv: list[str] | None = None) -> int:
                     media=media,
                     windows=windows,
                     apps=apps,
+                    system=system,
                     connectivity=connectivity,
                     long_tasks=long_tasks,
                     long_task_threshold_s=config.long_task_threshold_s,
@@ -1364,6 +1388,7 @@ def main(argv: list[str] | None = None) -> int:
             media=media,
             windows=windows,
             apps=apps,
+            system=system,
             connectivity=connectivity,
             long_tasks=long_tasks,
             long_task_threshold_s=config.long_task_threshold_s,
@@ -1389,6 +1414,7 @@ def main(argv: list[str] | None = None) -> int:
         media=media,
         windows=windows,
         apps=apps,
+        system=system,
         connectivity=connectivity,
         long_tasks=long_tasks,
         audit=audit,

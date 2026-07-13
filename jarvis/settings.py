@@ -36,6 +36,8 @@ class UserSettings:
     hotkey: str | None = None
     enable_hotkey: bool | None = None
     approved_folders: tuple[Path, ...] | None = None
+    # Capture folders for "open the last screen recording" (issue 16).
+    capture_folders: tuple[Path, ...] | None = None
     # Piper ONNX model path (voice identity).
     voice: Path | None = None
     # Optional explicit piper binary (advanced).
@@ -119,6 +121,14 @@ def parse_settings_dict(data: dict[str, Any]) -> UserSettings:
                 parsed.append(p)
             folders = tuple(parsed)
 
+    capture: tuple[Path, ...] | None = None
+    raw_capture = data.get("capture_folders")
+    if raw_capture is not None:
+        if isinstance(raw_capture, (str, Path)):
+            raw_capture = [raw_capture]
+        if isinstance(raw_capture, (list, tuple)):
+            capture = tuple(Path(str(item)).expanduser() for item in raw_capture)
+
     voice: Path | None = None
     for key in ("voice", "piper_model", "voice_model"):
         if data.get(key):
@@ -137,6 +147,7 @@ def parse_settings_dict(data: dict[str, Any]) -> UserSettings:
         hotkey=hotkey,
         enable_hotkey=enable_hotkey,
         approved_folders=folders,
+        capture_folders=capture,
         voice=voice,
         piper_exe=piper_exe,
         spotify_client_id=spotify_client_id,
@@ -159,6 +170,8 @@ def apply_user_settings(config: Any, settings: UserSettings | None = None) -> An
         updates["enable_hotkey"] = settings.enable_hotkey
     if settings.approved_folders is not None:
         updates["approved_folders"] = settings.approved_folders
+    if settings.capture_folders is not None:
+        updates["capture_folders"] = settings.capture_folders
     if settings.voice is not None:
         updates["piper_model"] = settings.voice
     if settings.piper_exe is not None:

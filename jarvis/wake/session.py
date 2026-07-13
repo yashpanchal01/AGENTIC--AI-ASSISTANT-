@@ -71,6 +71,7 @@ class FrontDoorSession:
     media: Any = None
     windows: Any = None
     apps: Any = None
+    system: Any = None
     long_tasks: LongTaskService | None = None
     confirmer: Any = None
     wake_phrases: tuple[str, ...] = DEFAULT_WAKE_PHRASES
@@ -223,6 +224,7 @@ class FrontDoorSession:
             "media": self.media,
             "windows": self.windows,
             "apps": self.apps,
+            "system": self.system,
             "long_tasks": self.long_tasks,
             "confirmer": self.confirmer,
             "wake_phrases": self.wake_phrases,

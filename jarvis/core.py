@@ -81,6 +81,13 @@ class AppHandler(Protocol):
     def try_handle(self, utterance: str) -> object | None: ...
 
 
+@runtime_checkable
+class SystemHandler(Protocol):
+    """Optional system controls: screen brightness + latest-capture (issue 16)."""
+
+    def try_handle(self, utterance: str) -> object | None: ...
+
+
 @dataclass(frozen=True)
 class CommandResult:
     """Observable outcome of one handle_command call."""
@@ -106,6 +113,7 @@ def handle_command(
     media: LocalMediaHandler | None = None,
     windows: WindowHandler | None = None,
     apps: AppHandler | None = None,
+    system: SystemHandler | None = None,
     connectivity: Connectivity | None = None,
     long_tasks: LongTaskService | None = None,
     overlay: Overlay | None = None,
@@ -321,6 +329,27 @@ def handle_command(
         if a_result is not None:
             result = _finish_handler(a_result, speaker=speaker)
             _audit_result(audit, result, path="apps")
+            return result
+
+    # System controls (issue 16): screen brightness + "open the last screen
+    # recording". Reflex fast path — non-destructive, offline-safe, no brain.
+    if system is not None:
+        try:
+            sys_result = system.try_handle(text)
+        except Exception as exc:  # noqa: BLE001 — boundary: never crash the REPL
+            reply = "Something went wrong with that system control."
+            speaker.speak(reply)
+            result = CommandResult(
+                reply=reply,
+                actions=(),
+                ok=False,
+                error=type(exc).__name__,
+            )
+            _audit_result(audit, result, path="system")
+            return result
+        if sys_result is not None:
+            result = _finish_handler(sys_result, speaker=speaker)
+            _audit_result(audit, result, path="system")
             return result
 
     # Local media before Spotify/brain: real disk search + OS open. Offline-safe.

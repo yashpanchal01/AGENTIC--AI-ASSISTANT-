@@ -37,6 +37,7 @@ def _hermetic_os_adapters(request, monkeypatch):
     from jarvis import cli as jarvis_cli
     from jarvis.apps.handler import AppHandler
     from jarvis.media.handler import LocalMediaHandler
+    from jarvis.system.handler import SystemHandler
     from jarvis.windows.handler import WindowHandler
     from jarvis.windows.win32api import WindowError
 
@@ -77,5 +78,15 @@ def _hermetic_os_adapters(request, monkeypatch):
         jarvis_cli,
         "make_media",
         lambda config: LocalMediaHandler(roots=()),
+    )
+    monkeypatch.setattr(
+        jarvis_cli,
+        "make_system",
+        lambda config: SystemHandler(
+            capture_roots=(),
+            get_brightness=lambda: 50,
+            set_brightness=lambda level: None,
+            open_fn=lambda path: None,
+        ),
     )
     yield

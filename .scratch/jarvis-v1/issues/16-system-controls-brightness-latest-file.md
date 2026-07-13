@@ -37,3 +37,43 @@ Out: external-monitor DDC/CI control; per-app volume or other new system verbs; 
 None — backend-audit follow-up (post-v1 architecture)
 
 ## Comments
+
+### 2026-07-13 — implemented (agent, left in tree for review; not committed)
+
+New slice `jarvis/system/` (brightness + latest-capture), wired as a reflex handler
+and an MCP bridge tool. Summary:
+
+- **Brightness impl choice:** PowerShell CIM subprocess (`Get-CimInstance` /
+  `Invoke-CimMethod` over `root/wmi`, `WmiSetBrightness`), not hand-rolled COM
+  through ctypes. Rationale: WMI brightness is COM-only; hand-rolling IWbem via
+  ctypes for one setter is fragile, and `pywin32`/`wmi` are exactly the heavy deps
+  this repo avoids (it built `windows/win32api.py` on ctypes and Google on stdlib
+  urllib). `subprocess` is stdlib → dependency-free, robust. Real calls isolated
+  behind `default_get_brightness` / `default_set_brightness` (fakeable).
+- **Graceful failure:** unsupported panels/externals → `BrightnessError` caught in
+  the handler → speaks `plain_replies.BRIGHTNESS_UNSUPPORTED` (new code
+  `brightness_unsupported`), `ok=False`, no crash/freeze. os_smoke skips (not fails)
+  on unsupported devices.
+- **Registration (per spec correction — issue-14 router is shelved/not on main):**
+  (1) reflex — new `system=` handler param on `handle_command`, dispatched before
+  the brain (mirrors apps/windows/media), threaded through cli/voice/wake/overlay;
+  (2) MCP bridge — new `system` tool in `mcp_bridge._TOOLS` + `system` field.
+  Neither verb trips the confirm gate (non-destructive; not risky/secret), so the
+  bridge tool runs un-gated and still emits StepStarted→StepFinished/StepFailed.
+- **Latest-file:** `find_latest` = newest-by-mtime in `config.capture_folders`,
+  video-ext filtered; opened via the media slice's real `default_open`. Empty/
+  missing folder → plain spoken "couldn't find…". Capture folders come from the new
+  `capture_folders` SETTINGS key / `JARVIS_CAPTURE_FOLDERS` env (default
+  `~/Videos/Captures`, `~/Videos`) — configurable without code edits.
+- **Audit:** both verbs flow through `handle_command` → `_audit_result(path="system")`.
+- **Tests:** default suite 284→314 passing (+29 unit in `test_system_controls.py`,
+  +1 bridge test; updated two bridge tests that hard-coded "six tools"). os_smoke
+  now 4 tests — ran the two new ones on this laptop: real WMI set-and-restore PASS
+  (captured original, set mild value, asserted, restored) and real newest-capture
+  open+close in a temp folder PASS.
+- **Acceptance:** all 5 criteria met (brightness set via WMI ✓, unsupported→plain ✓,
+  latest recording + empty-folder plain ✓, both in bridge + no confirm + audited ✓,
+  capture folders in settings ✓). Deviation: none functionally; router-list item
+  reinterpreted as the reflex handler per the spec correction.
+- **Bug fixed mid-build:** unescaped `{` in the PS set-template (`.format`) — real
+  calls raised ValueError; switched to `__LEVEL__` `str.replace`. Caught by os_smoke.

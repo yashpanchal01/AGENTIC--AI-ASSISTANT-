@@ -75,7 +75,7 @@ def test_initialized_notification_is_accepted(bridge: JarvisToolBridge) -> None:
     assert data == {}
 
 
-def test_tools_list_reports_six_tools(bridge: JarvisToolBridge) -> None:
+def test_tools_list_reports_all_tools(bridge: JarvisToolBridge) -> None:
     _status, _h, data = _post(
         bridge.url, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
     )
@@ -85,6 +85,7 @@ def test_tools_list_reports_six_tools(bridge: JarvisToolBridge) -> None:
         "apps",
         "windows",
         "media",
+        "system",
         "memory",
         "google_read",
     }
