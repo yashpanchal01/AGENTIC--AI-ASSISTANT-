@@ -49,6 +49,16 @@ _MINIMIZE_ALL = re.compile(
     r"|\bshow\s+desktop\b",
     re.I,
 )
+# "close all the windows" is the everyday idiom for MINIMIZE-all, never a
+# destructive close (issue 17). This deterministic reflex mapping lives here —
+# the router that was to own it (issue 14) is shelved. Kept tight so it can only
+# fire for the explicit "all/every windows" form: "close chrome" / "close this
+# window" still fall through to CLOSE below. It is checked before _CLOSE so the
+# minimize idiom wins for the "all" case.
+_CLOSE_ALL_WINDOWS = re.compile(
+    r"\bclose\s+(?:all|every)\s+(?:(?:of\s+)?(?:my|the|your|open)\s+)*windows?\b",
+    re.I,
+)
 _MINIMIZE = re.compile(r"\bminimize\b|\bminimise\b", re.I)
 _CLOSE = re.compile(r"\bclose\b(?:\s+the)?\s+(?P<t>.+)$", re.I)
 _FOCUS = re.compile(
@@ -133,7 +143,7 @@ def classify(utterance: str) -> WindowIntent:
         t = _MAXIMIZE.sub(" ", text)
         return WindowIntent(WindowIntentKind.MAXIMIZE, target=_clean_target(t))
 
-    if _MINIMIZE_ALL.search(text):
+    if _MINIMIZE_ALL.search(text) or _CLOSE_ALL_WINDOWS.search(text):
         return WindowIntent(WindowIntentKind.MINIMIZE_ALL)
 
     if _MINIMIZE.search(text):
