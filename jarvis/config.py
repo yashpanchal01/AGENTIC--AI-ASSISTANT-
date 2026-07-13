@@ -138,8 +138,9 @@ class JarvisConfig:
     # Capture folders for "open the last screen recording" (issue 16).
     capture_folders: tuple[Path, ...] = field(default_factory=_default_capture_folders)
     safe_tools: tuple[str, ...] = DEFAULT_SAFE_TOOLS
-    # Brain provider: "grok" (default while Claude limits are tight), "claude", or "fake".
-    brain_provider: str = "grok"
+    # Brain provider: "claude" (default — only brain with the MCP tool bridge, so
+    # the only one that can actually act), "grok" (fallback), or "fake".
+    brain_provider: str = "claude"
     claude_model: str = "sonnet"
     claude_bin: str = "claude"
     grok_bin: str = "grok"
@@ -197,9 +198,9 @@ class JarvisConfig:
         skip the settings file (tests / explicit CLI-only paths).
         """
         model = os.environ.get("JARVIS_MODEL", "sonnet")
-        brain = os.environ.get("JARVIS_BRAIN", "grok").strip().lower()
+        brain = os.environ.get("JARVIS_BRAIN", "claude").strip().lower()
         if brain not in ("grok", "claude", "fake"):
-            brain = "grok"
+            brain = "claude"
         grok_model = os.environ.get("JARVIS_GROK_MODEL", "").strip()
         grok_bin = os.environ.get("JARVIS_GROK_BIN", "grok").strip() or "grok"
         speak = os.environ.get("JARVIS_SPEAK", "1") not in ("0", "false", "no")

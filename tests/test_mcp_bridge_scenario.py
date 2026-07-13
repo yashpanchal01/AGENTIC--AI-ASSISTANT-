@@ -10,6 +10,7 @@ Start→Finish per call, and a spoken reply is produced through the real core.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 from jarvis.brain.mcp_bridge import JarvisToolBridge
@@ -44,12 +45,21 @@ class ScriptedBridgeBrain:
 
 
 def _fake_apps(launches: list[str]) -> AppHandler:
+    # Stateful fake: a matching window appears only AFTER launch, so honest-
+    # outcome verification passes without a real Win32 window list.
+    def _find(**kw):
+        proc = str(kw.get("process") or "").lower()
+        if proc and any(proc == k or proc in k or k in proc for k in launches):
+            return [SimpleNamespace(hwnd=1, title=proc, process=proc)]
+        return []
+
     return AppHandler(
         ops={
-            "find_windows": lambda **kw: [],
+            "find_windows": _find,
             "focus": lambda hwnd: None,
             "launch": lambda spec, force_new=False: launches.append(spec.key),
-        }
+        },
+        verify_poll_s=0.0,
     )
 
 

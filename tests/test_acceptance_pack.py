@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from jarvis.apps.catalog import AppSpec
 from jarvis.apps.handler import AppHandler
 from jarvis.audit import MemoryAuditLog
 from jarvis.brain.fake import FakeBrain
@@ -142,12 +143,25 @@ class ScriptedBridgeBrain:
 
 
 def _apps(launches: list[str]) -> AppHandler:
+    """Apps handler whose fake OS reflects reality: no window before launch, a
+    matching window AFTER launch — so honest-outcome verification passes."""
+
+    def _find(**kw: Any) -> list[WindowInfo]:
+        proc = str(kw.get("process") or "").lower()
+        if proc and any(proc == key or proc in key or key in proc for key in launches):
+            return [WindowInfo(hwnd=1, title=proc, pid=1, process=proc)]
+        return []
+
+    def _launch(spec: AppSpec, force_new: bool = False) -> None:
+        launches.append(spec.key)
+
     return AppHandler(
         ops={
-            "find_windows": lambda **kw: [],
+            "find_windows": _find,
             "focus": lambda hwnd: None,
-            "launch": lambda spec, force_new=False: launches.append(spec.key),
-        }
+            "launch": _launch,
+        },
+        verify_poll_s=0.0,
     )
 
 

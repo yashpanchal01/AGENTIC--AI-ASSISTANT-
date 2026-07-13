@@ -44,17 +44,29 @@ def _hermetic_os_adapters(request, monkeypatch):
     def _no_player(*_args, **_kwargs):
         raise WindowError("I couldn't find a media player window.")
 
-    monkeypatch.setattr(
-        jarvis_cli,
-        "make_apps",
-        lambda: AppHandler(
-            ops={
-                "find_windows": lambda **kw: [],
-                "focus": lambda hwnd: None,
-                "launch": lambda spec, force_new=False: None,
-            }
-        ),
-    )
+    def _make_hermetic_apps() -> AppHandler:
+        # Stateful fake: no window before launch, a matching window AFTER launch,
+        # so honest-outcome verification (issue: fake "Done") passes without ever
+        # touching the real Win32 window list.
+        from jarvis.windows.win32api import WindowInfo
+
+        launched: list[str] = []
+
+        def _find(**kw):
+            proc = str(kw.get("process") or "").lower()
+            if proc and any(proc == k or proc in k or k in proc for k in launched):
+                return [WindowInfo(hwnd=1, title=proc, pid=1, process=proc)]
+            return []
+
+        def _launch(spec, force_new=False):
+            launched.append(spec.key)
+
+        return AppHandler(
+            ops={"find_windows": _find, "focus": lambda hwnd: None, "launch": _launch},
+            verify_poll_s=0.0,
+        )
+
+    monkeypatch.setattr(jarvis_cli, "make_apps", _make_hermetic_apps)
     monkeypatch.setattr(
         jarvis_cli,
         "make_windows",

@@ -170,3 +170,84 @@ def test_score_match_requires_tokens() -> None:
     p = Path("Project Hail Mary (2026).mp4")
     assert score_match("Project Hail Mary", p) >= 0.9
     assert score_match("Dhurandhar", p) < 0.5
+
+
+# --------------------------------------------------------------------------
+# Reflex humility (live failure A): conversational / butchered utterances defer
+# --------------------------------------------------------------------------
+
+
+def test_live_failure_a_defers_to_brain() -> None:
+    """'i wanna watch dhurandar movie, check in downloads.' → NOT a media reflex.
+
+    The old reflex over-matched, butchered the query to 'i wanna dhurandar check'
+    and confidently failed. It must now decline so the brain (with file tools)
+    handles it.
+    """
+    intent = classify("i wanna watch dhurandar movie, check in downloads.")
+    assert intent.kind is MediaIntentKind.UNRELATED
+
+
+def test_live_failure_a_reaches_brain_via_core(tmp_path: Path) -> None:
+    media = LocalMediaHandler(roots=(tmp_path,), open_fn=lambda p: None)
+    brain = FakeBrain(script=[BrainTurn(reply="found and playing it", actions=())])
+    result = handle_command(
+        "i wanna watch dhurandar movie, check in downloads.",
+        brain=brain,
+        speaker=FakeSpeaker(),
+        media=media,
+    )
+    assert result.reply == "found and playing it"
+
+
+def test_canonical_play_commands_stay_reflex_fast() -> None:
+    """Clean imperatives must NOT be deferred — they stay on the media reflex."""
+    assert classify("play dhurandar").kind is MediaIntentKind.PLAY_IF_MATCH
+    i = classify("play dhurandar from downloads")
+    assert i.kind is MediaIntentKind.PLAY_LOCAL
+    assert i.query.lower() == "dhurandar"
+
+
+def test_conversational_lead_defers_even_with_clean_query(tmp_path: Path) -> None:
+    """A chatty lead ('can you play …') defers regardless of a tidy query."""
+    assert classify("can you play dhurandar from downloads").kind is (
+        MediaIntentKind.UNRELATED
+    )
+
+
+# --------------------------------------------------------------------------
+# Honest media outcomes: never claim success on a miss or open error
+# --------------------------------------------------------------------------
+
+
+def test_play_local_missing_file_reports_honest_failure(tmp_path: Path) -> None:
+    """PLAY_LOCAL with no matching file → spoken failure, ok=False (no fake win)."""
+    media = LocalMediaHandler(roots=(tmp_path,), open_fn=lambda p: None)
+    result = handle_command(
+        "play dhurandar from downloads",
+        brain=FakeBrain(script=[]),
+        speaker=FakeSpeaker(),
+        media=media,
+    )
+    assert result.ok is False
+    assert result.error == "not_found"
+    assert "couldn't find" in result.reply.lower()
+
+
+def test_open_error_reports_honest_failure(tmp_path: Path) -> None:
+    """A found file that fails to open must not claim success."""
+    movie = tmp_path / "Dhurandar (2026).mp4"
+    movie.write_bytes(b"x")
+
+    def _boom(_p: Path) -> None:
+        raise OSError("no associated application")
+
+    media = LocalMediaHandler(roots=(tmp_path,), open_fn=_boom)
+    result = handle_command(
+        "play dhurandar from downloads",
+        brain=FakeBrain(script=[]),
+        speaker=FakeSpeaker(),
+        media=media,
+    )
+    assert result.ok is False
+    assert "couldn't open" in result.reply.lower()

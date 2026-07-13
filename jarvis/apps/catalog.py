@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from pathlib import Path
 
 
@@ -154,11 +155,28 @@ def default_catalog() -> tuple[AppSpec, ...]:
             launch_candidates=(("cmd", "/c", "start", "ms-settings:"),),
             shell_start=None,
         ),
+        # ChatGPT: a website, not an installed app. Open chatgpt.com in the
+        # DEFAULT browser exactly once via ``start "" <url>`` (no launch
+        # candidates → single shell path, never two browsers/two tabs). No
+        # reliable process to detect, so launch verification is skipped.
+        AppSpec(
+            key="chatgpt",
+            spoken=("chatgpt", "chat gpt", "chat g p t", "open ai chat"),
+            processes=(),
+            launch_candidates=(),
+            shell_start="https://chatgpt.com",
+        ),
     )
 
 
 def resolve_app(name: str, catalog: tuple[AppSpec, ...] | None = None) -> AppSpec | None:
-    """Match spoken *name* to a catalog entry (longest alias wins)."""
+    """Match spoken *name* to a catalog entry (longest alias wins).
+
+    Falls back to a conservative typo tolerance ("fiels explorer" → file
+    explorer) only when no exact/prefix match is found — see
+    :func:`_fuzzy_resolve`. The fuzzy pass is strict enough that distinct apps
+    never bleed into each other ("brave" never resolves to anything but brave).
+    """
     cat = catalog or default_catalog()
     raw = " ".join((name or "").lower().split())
     if not raw:
@@ -175,4 +193,61 @@ def resolve_app(name: str, catalog: tuple[AppSpec, ...] | None = None) -> AppSpe
             cleaned = raw.removeprefix("the ").removesuffix(" app").removesuffix(" browser").strip()
             if cleaned == a and len(a) > best_len:
                 best, best_len = spec, len(a)
+    if best is not None:
+        return best
+    return _fuzzy_resolve(raw, cat)
+
+
+# Per-token similarity floor and averaged-alias floor for the typo fallback.
+_FUZZY_TOKEN_MIN = 0.6
+_FUZZY_ALIAS_MIN = 0.8
+# Tokens shorter than this are matched EXACTLY only — too short to fuzz safely
+# ("vlc" must never ≈ "calc", "wt" must never ≈ anything).
+_FUZZY_MIN_TOKEN_LEN = 4
+
+
+def _fuzzy_resolve(raw: str, cat: tuple[AppSpec, ...]) -> AppSpec | None:
+    """Conservative typo tolerance against catalog spoken aliases.
+
+    An alias matches only when it has the SAME number of tokens as *raw*, every
+    token pair is either equal or (both ≥ 4 chars) similar past
+    :data:`_FUZZY_TOKEN_MIN`, and the averaged similarity clears
+    :data:`_FUZZY_ALIAS_MIN`. This lets "fiels explorer" → "file explorer" and
+    "notepat" → "notepad" through while refusing cross-app collisions.
+    """
+    raw_toks = raw.split()
+    if not raw_toks:
+        return None
+    best: AppSpec | None = None
+    best_score = 0.0
+    for spec in cat:
+        for alias in spec.spoken:
+            a_toks = alias.lower().split()
+            if len(a_toks) != len(raw_toks):
+                continue
+            sims: list[float] = []
+            ok = True
+            for r_tok, a_tok in zip(raw_toks, a_toks):
+                if r_tok == a_tok:
+                    sims.append(1.0)
+                    continue
+                if min(len(r_tok), len(a_tok)) < _FUZZY_MIN_TOKEN_LEN:
+                    ok = False
+                    break
+                sim = SequenceMatcher(None, r_tok, a_tok).ratio()
+                if sim < _FUZZY_TOKEN_MIN:
+                    ok = False
+                    break
+                sims.append(sim)
+            if not ok or not sims:
+                continue
+            score = sum(sims) / len(sims)
+            if score < _FUZZY_ALIAS_MIN:
+                continue
+            # Multi-token aliases need at least one genuine (near-)exact anchor
+            # token, so a blur of two weak tokens can't add up to a false match.
+            if len(sims) > 1 and max(sims) < 0.9:
+                continue
+            if score > best_score:
+                best, best_score = spec, score
     return best

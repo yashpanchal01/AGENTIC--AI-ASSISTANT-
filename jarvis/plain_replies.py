@@ -26,6 +26,12 @@ ALREADY_FINISHED = "That already finished."
 # System controls (issue 16): panels/externals without WMI brightness support.
 BRIGHTNESS_UNSUPPORTED = "I can't change the screen brightness on this display."
 
+
+def app_no_window_reply(label: str) -> str:
+    """Honest failure when a launch fired but no window ever came up."""
+    name = (label or "that app").strip() or "that app"
+    return f"I tried to open {name} but nothing came up."
+
 _ERROR_REPLIES: dict[str, str] = {
     "brightness_unsupported": BRIGHTNESS_UNSUPPORTED,
     "brain_unreachable": BRAIN_UNREACHABLE,

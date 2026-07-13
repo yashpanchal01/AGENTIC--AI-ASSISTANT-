@@ -189,6 +189,16 @@ def classify(utterance: str) -> MediaIntent:
     if not query or len(query) < 2:
         return MediaIntent(MediaIntentKind.UNRELATED)
 
+    # Reflex humility: a conversational request ("i wanna watch X, check in
+    # downloads") or a butchered query ("i wanna dhurandar check") means this
+    # utterance is not a clean imperative — decline so core falls through to the
+    # brain, which has real file tools. Canonical "play dhurandar [from
+    # downloads]" has no conversational lead and a clean query, so it stays fast.
+    from jarvis.reflex_humility import should_defer_to_brain
+
+    if should_defer_to_brain(text, query):
+        return MediaIntent(MediaIntentKind.UNRELATED)
+
     # Known app name alone (e.g. leftover) — never soft-match media.
     if query.lower().strip() in _APP_NAMES:
         return MediaIntent(MediaIntentKind.UNRELATED)

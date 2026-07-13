@@ -66,7 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--brain",
         choices=("grok", "claude", "fake"),
         default=None,
-        help="Brain provider (default: grok, or JARVIS_BRAIN). 'fake' = no cloud CLI",
+        help="Brain provider (default: claude, or JARVIS_BRAIN). 'fake' = no cloud CLI",
     )
     p.add_argument(
         "--fake",
@@ -219,12 +219,15 @@ def make_brain(
     provider: str | None = None,
     bus=None,
 ):
-    """Build the configured brain. Default provider is Grok (see JARVIS_BRAIN).
+    """Build the configured brain. Default provider is Claude (see JARVIS_BRAIN).
+
+    Claude is the only brain wired to the MCP tool bridge (issue 15), so it is the
+    only one that can actually act; Grok stays a working fallback.
 
     With *bus* (issue 12), cloud brains stream live StepStarted/StepFinished/
     TokenTick events during each call and BrainSelected announces the provider.
     """
-    name = (provider or config.brain_provider or "grok").strip().lower()
+    name = (provider or config.brain_provider or "claude").strip().lower()
     if fake or name == "fake":
         name = "fake"
         brain = FakeBrain()

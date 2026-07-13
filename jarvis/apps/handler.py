@@ -13,6 +13,8 @@ from typing import Any
 
 from jarvis.apps.catalog import AppSpec, default_catalog, resolve_app
 from jarvis.apps.intents import AppIntentKind, classify
+from jarvis.plain_replies import app_no_window_reply
+from jarvis.reflex_humility import has_conversational_lead
 from jarvis.types import Action
 
 
@@ -34,11 +36,20 @@ class AppHandler:
 
     catalog: tuple[AppSpec, ...] = field(default_factory=default_catalog)
     ops: dict[str, Callable[..., Any]] = field(default_factory=dict)
+    # Honest-outcome verification: after a launch, poll for a matching window up
+    # to this bounded budget before claiming success (issue: fake "Done").
+    verify_timeout_s: float = 2.5
+    verify_poll_s: float = 0.25
 
     def _op(self, name: str, default: Callable[..., Any]) -> Callable[..., Any]:
         return self.ops.get(name, default)
 
     def try_handle(self, utterance: str) -> AppResult | None:
+        # Reflex humility: a conversational request ("can you open brave for me")
+        # is not a terse command — defer to the brain (mirrors the media reflex).
+        if has_conversational_lead(utterance):
+            return None
+
         intent = classify(utterance)
         if intent.kind is AppIntentKind.UNRELATED:
             return None
@@ -126,11 +137,40 @@ class AppHandler:
                 ok=False,
                 error=type(exc).__name__,
             )
+
+        # Honest outcome: don't claim success until a matching window shows up.
+        if not self._verify_appeared(spec):
+            return AppResult(
+                reply=app_no_window_reply(label),
+                ok=False,
+                error="no_window",
+                actions=(Action(name="app_launch_failed", detail=spec.key),),
+            )
+
         detail = f"{spec.key}|new" if force_new else spec.key
         return AppResult(
             reply=f"Opened {label}." if not force_new else f"Opened a new {label} window.",
             actions=(Action(name="app_launch", detail=detail),),
         )
+
+    def _verify_appeared(self, spec: AppSpec) -> bool:
+        """Poll (bounded) for a window matching *spec* after a launch.
+
+        Returns True as soon as one appears. Apps with no detectable process
+        (URL / shell targets like ChatGPT or Windows Settings) can't be verified
+        reliably, so we trust the launch rather than invent a false failure.
+        """
+        import time
+
+        if not spec.processes:
+            return True
+        deadline = time.monotonic() + max(0.0, self.verify_timeout_s)
+        while True:
+            if self._find_window(spec) is not None:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(self.verify_poll_s)
 
 
 # Chromium-family: bare startfile reuses the running instance; need --new-window.

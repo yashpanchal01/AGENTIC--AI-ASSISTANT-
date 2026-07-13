@@ -166,3 +166,65 @@ NOT compound. Whole default suite green.
 
 Test counts: default 321 → 359 (+36 `test_compound`, +2 acceptance guard tests);
 deselected unchanged at 9. No deviations — implemented as specified; no commits.
+
+---
+
+### 2026-07-13 — Four "dumbness" fixes from live user testing
+
+Live transcript surfaced four trust-killers. All fixed minimally; whole default
+suite green (383 → 395), quota-safe (no real Claude/OS).
+
+**1. Reflex humility (`jarvis/reflex_humility.py`, new).** Live failure A —
+"i wanna watch dhurandar movie, check in downloads." — had the media reflex
+over-match on watch+downloads, butcher the query via `extract_query` to
+"i wanna dhurandar check", then confidently fail. Now a shared guard makes a
+reflex DECLINE (return UNRELATED/None → core falls through to the brain) on two
+signals: (a) a leading conversational lead ("i wanna|i want to|can you|could
+you|please find me|let's|i'd like|…"), or (b) a garbage extracted query — after
+chrome-stripping the leftover still contains a word that never belongs to a real
+title/app name ("i|wanna|check|movie|watch|play|open|…") or nothing survived.
+Wired into `jarvis/media/intents.classify` (after extraction) and
+`jarvis/apps/handler.try_handle` (conversational lead only; the apps `_OPEN`
+regex is already start-anchored). Canonical "play dhurandar" /
+"play dhurandar from downloads" / "open brave" have no lead and a clean query, so
+they stay reflex-fast (asserted). Mirrors `jarvis/compound.py`'s bias: brain when
+conversational, reflex when imperative-and-clean.
+
+**2. Default brain grok → claude (`jarvis/config.py`, `jarvis/cli.py`).** Only
+Claude has the MCP tool bridge, so it is the only brain that can actually act;
+Grok (no bridge) was silently faking success. Flipped the dataclass default and
+the `from_env`/invalid-value fallback; `JARVIS_BRAIN` still overrides and grok
+stays a working fallback. Updated cli help text and `build_brain` docstring. No
+test asserted the old default.
+
+**3. App catalog (`jarvis/apps/catalog.py`).** (a) Added a `chatgpt` entry that
+opens `https://chatgpt.com` in the DEFAULT browser exactly once via `start ""
+<url>` — no launch candidates → a single shell path, never the live
+double-browser/double-tab bug (B). (b) `resolve_app` gained a conservative typo
+fallback (`_fuzzy_resolve`), tried only when no exact/prefix match: same token
+count, each token equal or (both ≥4 chars) similar ≥0.6, averaged ≥0.8, and
+multi-token aliases need one near-exact anchor (≥0.9). "fiels explorer" → file
+explorer, "notepat" → notepad, "chrom" → chrome; distinct apps never collide
+(short tokens matched exactly only, so "vlc"↛"calc"), asserted with negatives.
+
+**4. Honest outcomes (`jarvis/apps/handler.py`, `jarvis/plain_replies.py`).**
+After a launch, `_verify_appeared` polls the injected `find_windows` op for a
+matching window up to a bounded `verify_timeout_s` (default 2.5s, poll 0.25s) —
+success only when a window shows up; otherwise a plain spoken failure
+("I tried to open X but nothing came up.", `app_no_window_reply`, ok=False,
+error="no_window"). Apps with no detectable process (chatgpt URL, ms-settings)
+skip verification rather than invent a false failure. Latency: ~0 on success
+(returns on the first poll that finds the window); up to ~2.5s only when a launch
+genuinely produced nothing. Media path already reported honestly (missing file →
+not_found; open error → "found … but couldn't open"); added regression tests.
+
+**Tests.** `tests/test_local_media.py` +6 (live A defers + reaches brain,
+canonical phrasings stay reflex, conversational lead defers, honest miss/open
+failures). `tests/test_apps.py` +6 (chatgpt resolve + single launch, typo
+resolve, cross-app negatives, apps conversational deferral, launch-but-no-window
+honest failure) and updated `test_launch_when_not_running` (window now appears
+post-launch). Hermetic apps fakes made stateful (window appears only after
+launch) in `tests/conftest.py`, `tests/test_acceptance_pack.py`,
+`tests/test_mcp_bridge.py`, `tests/test_mcp_bridge_scenario.py` so
+honest-outcome verification passes — no tier shifted; the acceptance (b)/(e)
+tiers are unchanged. Counts: 383 → 395 (+12), 9 deselected unchanged. No commits.
