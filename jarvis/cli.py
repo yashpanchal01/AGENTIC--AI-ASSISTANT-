@@ -949,6 +949,7 @@ def _run_with_qt_overlay(
     enable_tray: bool = False,
     use_overlay: bool = True,
     bus=None,
+    overlay_style: str = "aurora",
 ) -> int:
     """Run *work(overlay)* on a worker thread while the Qt event loop paints.
 
@@ -973,14 +974,24 @@ def _run_with_qt_overlay(
     overlay = None
     overlay_front = None
     if use_overlay:
-        from jarvis.overlay.aurora import AuroraOverlay
+        if overlay_style == "spine":
+            from jarvis.overlay.spine import SpineOverlay
 
-        overlay = AuroraOverlay()
+            overlay = SpineOverlay()
+        else:
+            from jarvis.overlay.aurora import AuroraOverlay
+
+            overlay = AuroraOverlay()
         overlay_front = overlay
         if bus is not None:
             from jarvis.overlay.bus import BusOverlay, attach_overlay
 
             attach_overlay(bus, overlay)
+            # SPINE additionally rides the rich instrument events; Aurora only
+            # needs the StateChanged path above.
+            attach_events = getattr(overlay, "attach_events", None)
+            if callable(attach_events):
+                attach_events(bus)
             overlay_front = BusOverlay(bus, overlay)
     result_box: dict[str, int] = {"code": 1}
     tray = None
@@ -1298,6 +1309,7 @@ def main(argv: list[str] | None = None) -> int:
                 enable_tray=use_tray,
                 use_overlay=use_overlay,
                 bus=bus,
+                overlay_style=config.overlay_style,
             )
         return _daemon_work(None)
 
@@ -1335,6 +1347,7 @@ def main(argv: list[str] | None = None) -> int:
                     audit=audit,
                 ),
                 bus=bus,
+                overlay_style=config.overlay_style,
             )
         return run_listen(
             brain=brain,
@@ -1377,6 +1390,7 @@ def main(argv: list[str] | None = None) -> int:
                     audit=audit,
                 ),
                 bus=bus,
+                overlay_style=config.overlay_style,
             )
         return run_once(
             args.once,

@@ -184,6 +184,9 @@ class JarvisConfig:
     unload_stt_between_commands: bool = False
     # Long tasks (issue 10): background brain turns that exceed this many seconds.
     long_task_threshold_s: float = 20.0
+    # Overlay face (issue 18): "aurora" (default Mono pill) or "spine" (MK.I SPINE
+    # instrument plate). Override with JARVIS_OVERLAY_STYLE or the settings key.
+    overlay_style: str = "aurora"
 
     @classmethod
     def from_env(cls, *, apply_settings: bool = True) -> JarvisConfig:
@@ -236,6 +239,9 @@ class JarvisConfig:
             long_thresh = float(os.environ.get("JARVIS_LONG_TASK_S", "20"))
         except ValueError:
             long_thresh = 20.0
+        overlay_style = os.environ.get("JARVIS_OVERLAY_STYLE", "aurora").strip().lower()
+        if overlay_style not in ("aurora", "spine"):
+            overlay_style = "aurora"
         cfg = cls(
             brain_provider=brain,
             claude_model=model,
@@ -257,6 +263,7 @@ class JarvisConfig:
             check_connectivity=check_net,
             unload_stt_between_commands=unload_stt,
             long_task_threshold_s=long_thresh,
+            overlay_style=overlay_style,
         )
         if apply_settings:
             from jarvis.settings import apply_user_settings, load_settings_for_config

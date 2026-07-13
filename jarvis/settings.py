@@ -44,6 +44,8 @@ class UserSettings:
     piper_exe: str | None = None
     # Spotify developer-app client ID (issue 09) — an ID, not a secret.
     spotify_client_id: str | None = None
+    # Overlay face (issue 18): "aurora" (default) or "spine".
+    overlay_style: str | None = None
     raw: dict[str, Any] | None = None
 
 
@@ -143,6 +145,12 @@ def parse_settings_dict(data: dict[str, Any]) -> UserSettings:
     if spotify_client_id is not None:
         spotify_client_id = str(spotify_client_id).strip() or None
 
+    overlay_style = data.get("overlay_style")
+    if overlay_style is not None:
+        overlay_style = str(overlay_style).strip().lower() or None
+        if overlay_style not in ("aurora", "spine", None):
+            overlay_style = None
+
     return UserSettings(
         hotkey=hotkey,
         enable_hotkey=enable_hotkey,
@@ -151,6 +159,7 @@ def parse_settings_dict(data: dict[str, Any]) -> UserSettings:
         voice=voice,
         piper_exe=piper_exe,
         spotify_client_id=spotify_client_id,
+        overlay_style=overlay_style,
         raw=dict(data),
     )
 
@@ -178,6 +187,8 @@ def apply_user_settings(config: Any, settings: UserSettings | None = None) -> An
         updates["piper_exe"] = settings.piper_exe
     if settings.spotify_client_id is not None:
         updates["spotify_client_id"] = settings.spotify_client_id
+    if settings.overlay_style is not None:
+        updates["overlay_style"] = settings.overlay_style
     if not updates:
         return config
     # Dataclass replace keeps identity of other fields.
