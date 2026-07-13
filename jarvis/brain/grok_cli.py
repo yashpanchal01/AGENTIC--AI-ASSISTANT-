@@ -16,7 +16,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from jarvis.config import JARVIS_SYSTEM_PROMPT, JarvisConfig
+from jarvis.config import (
+    GROK_NO_TOOL_BRIDGE_NOTE,
+    JARVIS_SYSTEM_PROMPT,
+    JarvisConfig,
+)
 from jarvis.events import StepFinished, StepStarted
 from jarvis.confirm import (
     confirmation_prompt,
@@ -284,6 +288,9 @@ class GrokCliBrain:
         memory_ctx = memory_context_for_prompt(self.config.memory_dir)
         if memory_ctx:
             system = f"{system} {memory_ctx}"
+        # Grok has no JARVIS MCP tool bridge (issue 15): document the capability
+        # gap in-prompt so it never claims to control music/apps/windows itself.
+        system = f"{system} {GROK_NO_TOOL_BRIDGE_NOTE}"
         # Grok CLI gotchas (2026-07):
         # - --tools allowlist breaks session create (run_terminal_cmd constraint).
         # - --disallowed-tools Agent (or similar) also breaks the same constraint.

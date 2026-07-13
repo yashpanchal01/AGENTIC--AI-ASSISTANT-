@@ -16,7 +16,12 @@ from pathlib import Path
 from typing import Any
 
 from jarvis.brain.stream_json import StreamParseState, feed_stream_json_line
-from jarvis.config import DEFAULT_SAFE_TOOLS, JARVIS_SYSTEM_PROMPT, JarvisConfig
+from jarvis.config import (
+    CLAUDE_TOOL_BRIDGE_GUIDANCE,
+    DEFAULT_SAFE_TOOLS,
+    JARVIS_SYSTEM_PROMPT,
+    JarvisConfig,
+)
 from jarvis.confirm import (
     confirmation_prompt,
     describe_risky_action,
@@ -42,6 +47,11 @@ class ClaudeCodeBrain:
     session_id: str | None = None
     # Optional EventBus (issue 12): tool steps stream live during the call.
     bus: Any = None
+    # Optional MCP tool bridge (issue 15): when set, JARVIS's own tools
+    # (spotify/apps/windows/media/memory/google_read) are registered with the
+    # CLI over an in-process HTTP MCP server and the brain is told to prefer
+    # them. Tool calls run in-process through the real confirm gate + bus.
+    tool_bridge: Any = None
     _claude_bin: str | None = field(default=None, init=False, repr=False)
     _proc: subprocess.Popen[str] | None = field(default=None, init=False, repr=False)
     _proc_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
@@ -324,6 +334,19 @@ class ClaudeCodeBrain:
         memory_ctx = memory_context_for_prompt(self.config.memory_dir)
         if memory_ctx:
             system = f"{system} {memory_ctx}"
+        # MCP tool bridge (issue 15): register JARVIS's own tools with the CLI
+        # and tell the brain to prefer them over shell for those domains.
+        mcp_config_json: str | None = None
+        if self.tool_bridge is not None:
+            try:
+                self.tool_bridge.ensure_started()
+                mcp_config_json = self.tool_bridge.mcp_config_json()
+                bridge_tools = self.tool_bridge.allowed_tool_ids()
+                if bridge_tools:
+                    tools = tools + "," + ",".join(bridge_tools)
+                system = f"{system} {CLAUDE_TOOL_BRIDGE_GUIDANCE}"
+            except Exception:  # noqa: BLE001 — bridge is best-effort; brain still works
+                mcp_config_json = None
         args = [
             bin_path,
             "-p",
@@ -338,6 +361,8 @@ class ClaudeCodeBrain:
             "--append-system-prompt",
             system,
         ]
+        if mcp_config_json:
+            args.extend(["--mcp-config", mcp_config_json])
         for folder in self.config.approved_folders:
             args.extend(["--add-dir", str(folder)])
         if self.session_id:

@@ -41,3 +41,53 @@ Out: new tools beyond the six domains listed (brightness/latest-file arrive via 
 None — backend-audit follow-up (post-v1 architecture)
 
 ## Comments
+
+### 2026-07-13 — implemented (agent)
+
+**Transport: Option A (in-process HTTP MCP server).** JARVIS hosts a Streamable-HTTP
+MCP server *inside its own process* (`jarvis/brain/mcp_bridge.py`, hand-rolled on
+`http.server` + stdlib `json` — no `mcp` SDK dependency, consistent with the repo's
+stdlib style) bound to `127.0.0.1:<ephemeral>`, and registers it with the Claude CLI by
+URL via `--mcp-config '{"mcpServers":{"jarvis":{"type":"http","url":".../mcp"}}}'`.
+Chosen over Option B (stdio proxy + IPC) because the spec's stdio server is spawned as
+the CLI's *own* child process with no shared memory — it could not touch JARVIS's live
+confirmer or in-process `EventBus`. **With Option A the confirm gate and Step* events do
+not cross a process boundary at all:** every `tools/call` runs on JARVIS's own threads
+with direct references to the real handlers, the real `Confirmer`, and the real bus. No
+IPC, no serialization, nothing stubbed.
+
+**Safety gate.** Every side-effecting call goes through `jarvis/confirm.py` **unchanged**:
+`is_secret_request` → hard-deny (handler never runs); `is_risky_request` → ask-first via
+the injected confirmer (decline/`None` confirmer ⇒ never runs). Plus a *bridge-scoped*
+tightening (`_BRIDGE_EXTRA_RISKY = close|forget`) that ADDS confirmation for the two
+destructive domain verbs the generic word-list misses — window **close** (task explicitly
+requires it) and memory **forget**. This only strengthens; it never weakens confirm.py and
+does not touch the voice path.
+
+**Bus.** Each call emits `StepStarted` then `StepFinished` (ok) or `StepFailed`
+(secret/decline/handler-error/unhandled), errors mapped through `plain_replies`.
+
+**System prompt** (`jarvis/config.py`): removed the Spotify/media "handled by JARVIS
+itself" bans; base now un-bans those domains and keeps the Gmail/Calendar *write* refusal
++ "never fake success". Claude gets `CLAUDE_TOOL_BRIDGE_GUIDANCE` (prefer the six tools
+over shell) only when the bridge is active. Grok gets `GROK_NO_TOOL_BRIDGE_NOTE`
+documenting that it lacks the bridge (capability gap) — Grok is otherwise unchanged and
+bridge-less.
+
+**Scenario proof:** `tests/test_mcp_bridge_scenario.py` drives a fake brain (scripted to
+call `apps` then `spotify`) through `core.handle_command`; asserts Spotify launched, the
+next-track fired, bus events ordered StepStarted/Finished(apps) → StepStarted/Finished(spotify),
+and a spoken reply. A real MCP handshake (`initialize`/`tools/list`/`tools/call`) is proven
+against the live server with a urllib client in `tests/test_mcp_bridge_handshake.py`.
+
+**Deviations / flags:**
+- Literal "stdio" is deviated from (Option A HTTP) — deliberate, per the crux; documented above.
+- The real-`claude` end-to-end test is gated behind the opt-in `claude_live` marker
+  (`tests/test_mcp_bridge_live.py`), deselected by default so CI never burns Claude usage.
+  It was **not executed** here to avoid burning the user's quota; the server's MCP
+  conformance is instead verified against a compliant urllib client. Run with
+  `py -3.13 -m pytest -m claude_live`.
+- Pre-existing hazard (not introduced here): `tests/test_smoke_claude.py` (marker `smoke`)
+  is still collected by default and calls the real Claude CLI when `claude` is on PATH.
+  Left as-is to preserve the documented baseline count; consider adding `smoke` to the
+  default deselect list if CI has `claude` installed.

@@ -56,3 +56,42 @@ def test_reset_session_clears_resume() -> None:
     brain.reset_session()
     assert brain.session_id is None
     assert "--resume" not in brain._build_args("hello")
+
+
+def test_no_bridge_means_no_mcp_registration() -> None:
+    args = ClaudeCodeBrain(config=JarvisConfig())._build_args("hello")
+    assert "--mcp-config" not in args
+    assert not any("mcp__jarvis__" in a for a in args)
+
+
+def test_build_args_registers_mcp_tool_bridge() -> None:
+    import json
+
+    from jarvis.brain.mcp_bridge import JarvisToolBridge, allowed_tool_ids
+
+    bridge = JarvisToolBridge()
+    brain = ClaudeCodeBrain(config=JarvisConfig(), tool_bridge=bridge)
+    try:
+        args = brain._build_args("open spotify and play the next track")
+
+        # The in-process HTTP MCP server is registered by URL.
+        assert "--mcp-config" in args
+        cfg = json.loads(args[args.index("--mcp-config") + 1])
+        server = cfg["mcpServers"]["jarvis"]
+        assert server["type"] == "http"
+        assert server["url"].startswith("http://127.0.0.1:")
+        assert server["url"].endswith("/mcp")
+
+        # All six JARVIS tools are allow-listed alongside the safe shell tools.
+        tools = args[args.index("--allowedTools") + 1]
+        for tool_id in allowed_tool_ids():
+            assert tool_id in tools
+        assert "Bash" in tools  # existing safe tools still present
+
+        # The brain is told to prefer the JARVIS tools over shell.
+        prompt = args[args.index("--append-system-prompt") + 1]
+        assert "JARVIS" in prompt
+        assert "prefer" in prompt.lower()
+        assert "google_read" in prompt
+    finally:
+        bridge.stop()

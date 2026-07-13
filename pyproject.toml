@@ -58,9 +58,13 @@ include = ["jarvis*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-# os_smoke is deselected automatically; run it on demand: pytest -m os_smoke
-addopts = "-m \"not os_smoke\""
+# smoke, os_smoke and claude_live are deselected automatically; run on demand:
+#   pytest -m smoke           (real Claude CLI "pong" smoke — burns usage)
+#   pytest -m os_smoke        (real-OS adapters)
+#   pytest -m claude_live     (real Claude CLI end-to-end MCP tool bridge)
+addopts = "-m \"not smoke and not os_smoke and not claude_live\""
 markers = [
-    "smoke: optional real Claude CLI smoke tests (skipped by default)",
+    "smoke: optional real Claude CLI smoke test (deselected by default; run with: pytest -m smoke)",
     "os_smoke: opt-in real-OS adapter smoke tests (launches Notepad / opens media for real); run with: pytest -m os_smoke",
+    "claude_live: opt-in end-to-end test that invokes the real Claude CLI against the live MCP tool bridge (burns Claude usage); run with: pytest -m claude_live",
 ]

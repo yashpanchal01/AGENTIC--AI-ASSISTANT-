@@ -31,16 +31,35 @@ JARVIS_SYSTEM_PROMPT = (
     "Destructive, system-level, or out-of-folder actions are gated by JARVIS itself "
     "before this prompt — if you are asked to perform one, the user already said "
     "yes; proceed with the action. "
-    "Gmail and Calendar are handled by JARVIS itself (read-only); do not send, "
-    "reply, forward email or create calendar events. "
-    "Spotify playback (play, pause, skip, now playing, volume) is handled by "
-    "JARVIS itself; do not try to control music yourself. "
-    "Playing local media files from Downloads/Desktop/Documents/Videos is also "
-    "handled by JARVIS itself; do not invent success for file opens. "
+    "Gmail and Calendar are read-only: you may summarize mail or the schedule, "
+    "but never send, reply to, or forward email, and never create calendar events. "
     "When something fails (file not found, app missing, tool error), explain in "
-    "one short plain sentence what went wrong and why — never fail silently and "
-    "never return a stack trace. "
+    "one short plain sentence what went wrong and why — never fail silently, never "
+    "return a stack trace, and never claim an action succeeded when it did not. "
     "Reply in one short spoken-style sentence when done."
+)
+
+# Appended for the Claude brain ONLY when the MCP tool bridge (issue 15) is
+# active: it can call JARVIS's own tools, so it should prefer them over shell.
+CLAUDE_TOOL_BRIDGE_GUIDANCE = (
+    "You have JARVIS's own tools for these domains: spotify (music playback), "
+    "apps (open/focus a desktop app), windows (focus/minimize/maximize/snap/close "
+    "a window), media (play a local media file), memory (remember/recall/forget "
+    "facts), and google_read (read-only Gmail and Calendar). Prefer these tools "
+    "over raw shell commands for those domains — they are more reliable and speak "
+    "the reply for you. For a multi-domain request, call them in order (e.g. open "
+    "an app, then control its playback). google_read is read-only; JARVIS refuses "
+    "to send, reply, forward email, or create calendar events."
+)
+
+# Appended for the Grok brain: it does NOT have the tool bridge (issue 15), so
+# it must not pretend to call those tools or fake success.
+GROK_NO_TOOL_BRIDGE_NOTE = (
+    "Note: you do not have JARVIS's tool bridge — the spotify, apps, windows, "
+    "media, memory, and google_read tools are available only to the primary "
+    "Claude brain. Handle app/window/music/media requests with your normal shell "
+    "tools where you can; if you cannot, say so plainly in one sentence and never "
+    "pretend an action succeeded."
 )
 
 

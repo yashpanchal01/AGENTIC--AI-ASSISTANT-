@@ -406,6 +406,17 @@ def make_confirmer(
     return FixedConfirmer(answer=False)
 
 
+def _attach_bridge_confirmer(brain: Any, confirmer: Any) -> None:
+    """Give the Claude brain's MCP tool bridge the same confirmer the core uses.
+
+    Brain tool calls (issue 15) then pass the identical ask-first gate as a
+    direct voice command. No-op for Grok/fake brains (no bridge).
+    """
+    bridge = getattr(brain, "tool_bridge", None)
+    if bridge is not None and confirmer is not None:
+        bridge.confirmer = confirmer
+
+
 def run_once(
     command: str,
     *,
@@ -426,6 +437,7 @@ def run_once(
 ) -> int:
     if confirmer is None:
         confirmer = make_confirmer(interactive=sys.stdin.isatty(), overlay=overlay)
+    _attach_bridge_confirmer(brain, confirmer)
     if overlay is not None:
         from jarvis.overlay.lifecycle import handle_command_with_overlay
 
@@ -545,6 +557,7 @@ def run_listen(
             recorder=recorder,
             transcriber=transcriber,
         )
+    _attach_bridge_confirmer(brain, confirmer)
     try:
         if overlay is not None:
             from jarvis.overlay.lifecycle import listen_and_handle_with_overlay
@@ -670,6 +683,7 @@ def run_daemon(
             recorder=recorder,
             transcriber=transcriber,
         )
+    _attach_bridge_confirmer(brain, confirmer)
 
     session = FrontDoorSession(
         detector=detector,
@@ -818,6 +832,9 @@ def run_repl(
         )
     elif audit is not None and getattr(long_tasks, "audit", None) is None:
         long_tasks.audit = audit
+
+    # Brain tool bridge (issue 15) shares the REPL's stdin confirmer.
+    _attach_bridge_confirmer(brain, make_confirmer(interactive=True))
 
     while True:
         try:
@@ -1146,6 +1163,22 @@ def main(argv: list[str] | None = None) -> int:
     apps = make_apps()
     # Markdown long-term memory is local and works with every brain (incl. fake).
     memory = make_memory(config, no_memory=args.no_memory)
+    # MCP tool bridge (issue 15): give the Claude brain JARVIS's own tools over
+    # an in-process HTTP MCP server. Tool calls run through the real confirm
+    # gate + event bus. Only the Claude provider gets the bridge (Grok has none;
+    # its capability gap is documented in the Grok system prompt).
+    if isinstance(brain, ClaudeCodeBrain):
+        from jarvis.brain.mcp_bridge import JarvisToolBridge
+
+        brain.tool_bridge = JarvisToolBridge(
+            bus=bus,
+            spotify=spotify,
+            apps=apps,
+            windows=windows,
+            media=media,
+            memory=memory,
+            google=google,
+        )
     # Fake brain needs no network; skip connectivity pre-check so offline demos work.
     connectivity = None if use_fake else make_connectivity(config)
     audit = _make_audit(args)
