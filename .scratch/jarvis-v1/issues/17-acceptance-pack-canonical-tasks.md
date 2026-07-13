@@ -112,3 +112,57 @@ Flags / deviations:
 - (d) os_smoke honors the canonical "to zero": it drives real WMI to 0 (brief
   screen dip), captures the original first and ALWAYS restores in `finally`.
   Skips on panels without WMI brightness.
+
+### 2026-07-13 — Compound-command guard (closes the (b)/(e) gap above, agent)
+
+The flag above ("(b) compound routing … out of scope for 17") is now CLOSED: the
+half-execution it described is fixed at the reflex layer, so (b)/(e) route to the
+brain through the GENUINE stack rather than a forced brain-path shim.
+
+Files:
+- `jarvis/compound.py` — **new.** `is_compound_command(text) -> bool`,
+  conservative (biased to False). Triggers on either shape:
+  1. a conjunction (`" and "`, `" then "`, `", then "`, `"; "`, `" & "`,
+     `" after that "`) followed by a second imperative action verb starting a
+     new command (play/pause/resume/stop/skip/next/previous/open/launch/start/
+     run/close/minimize/maximize/snap/move/put/set/dim/turn/mute/focus/switch/
+     show/delete/send). A verb whose object is a back-reference pronoun
+     ("… and play **it**/**them**") is a continuation, NOT a new action, so it
+     does not trigger — this is what keeps media "find X and play it" single.
+  2. a two-window arrangement: "side by side" / "split screen" / "next to each
+     other", OR an explicit LEFT placement paired with an explicit RIGHT
+     placement ("brave left 50%, vs code right"). One side alone (a single snap)
+     never triggers.
+- `jarvis/core.py` — one gate in `handle_command`, placed AFTER the memory
+  reflex (single-fact "remember … and …" stays local) but BEFORE Google / apps /
+  system / media / windows / spotify. When `is_compound_command` is True every
+  reflex below is skipped (guarded with `and not compound`) and the command
+  routes to the brain + MCP bridge; offline it falls to the existing
+  BRAIN_UNREACHABLE path — never a silent half-execute.
+- `tests/test_compound.py` — **new**, 36 unit cases: every must-pass positive
+  and must-not-break negative from the task, plus edges.
+- `tests/test_acceptance_pack.py` — (b)/(e) now wire the FULL reflex chain (the
+  same apps/spotify/windows handlers back both the reflex tier and the bridge);
+  the tier assertion proves the reflexes DECLINE and the brain composes the
+  two/four steps. Added two guard tests: a single "open spotify" still lands on
+  the apps reflex (guard is one-sided), and a compound command offline degrades
+  to `brain_unreachable` with the apps reflex never firing.
+
+Placement rationale: memory is the only tier that legitimately swallows an "and"
+(a single fact), so the gate sits immediately after it; every tier below can
+half-execute a multi-step utterance, so all are gated. This is the least
+surprising spot — it changes routing for exactly the compound case and nothing
+else.
+
+Positives (route to brain): "open spotify and play the next music",
+"open brave and vs code side by side, brave left 50%, vs code right",
+"open notepad and minimize everything", "play some music and dim the brightness"
+— all detected. Negatives (stay on their reflex): "open spotify"/"open brave"/
+"launch vs code" → apps; "play rock and roll"/"play guns and roses" → spotify;
+"open command and conquer" → apps; "remember … and …"/"remind me to buy milk and
+eggs" → memory/single; "close chrome"/"minimize all windows"/"dim brightness to
+zero"/"next track" → their tiers; "find X in Downloads and play it" → media — all
+NOT compound. Whole default suite green.
+
+Test counts: default 321 → 359 (+36 `test_compound`, +2 acceptance guard tests);
+deselected unchanged at 9. No deviations — implemented as specified; no commits.

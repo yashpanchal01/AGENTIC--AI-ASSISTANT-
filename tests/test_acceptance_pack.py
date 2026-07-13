@@ -302,9 +302,13 @@ def test_b_open_spotify_then_next_is_brain_bridge_two_steps() -> None:
     bus = EventBus()
     launches: list[str] = []
     player = FakeSpotifyPlayer()
-    bridge = JarvisToolBridge(
-        bus=bus, apps=_apps(launches), spotify=sample_spotify(player=player)
-    )
+    # The SAME handler instances back both the reflex chain and the bridge, so
+    # this exercises genuine routing: the apps/spotify reflexes are really wired
+    # and the compound guard must DECLINE them (else the apps reflex would grab
+    # "spotify …" and launch Spotify only, dropping "play next").
+    apps = _apps(launches)
+    spotify = sample_spotify(player=player)
+    bridge = JarvisToolBridge(bus=bus, apps=apps, spotify=spotify)
     brain = ScriptedBridgeBrain(
         bridge=bridge,
         script=(
@@ -314,7 +318,11 @@ def test_b_open_spotify_then_next_is_brain_bridge_two_steps() -> None:
     )
 
     run = run_pack(
-        "open spotify and play the next music", brain=brain, bus=bus
+        "open spotify and play the next music",
+        brain=brain,
+        bus=bus,
+        apps=apps,  # full reflex chain wired — guard declines → brain composes
+        spotify=spotify,
     )
 
     assert run.tier == "brain", f"compound must reach the brain, got {run.tier}"
@@ -398,7 +406,11 @@ def test_e_side_by_side_launches_waits_and_snaps_in_order() -> None:
     snaps: list[str] = []
     waited: list[dict[str, Any]] = []
     windows = _windows(snaps=snaps, waited=waited, resolve_via_wait=True)
-    bridge = JarvisToolBridge(bus=bus, apps=_apps(launches), windows=windows)
+    # SAME handlers back the reflex chain and the bridge (genuine routing): with
+    # the reflexes wired, the apps reflex would otherwise grab "brave and vs code
+    # …" and open Brave only. The compound guard ("side by side") must decline.
+    apps = _apps(launches)
+    bridge = JarvisToolBridge(bus=bus, apps=apps, windows=windows)
     brain = ScriptedBridgeBrain(
         bridge=bridge,
         script=(
@@ -413,6 +425,8 @@ def test_e_side_by_side_launches_waits_and_snaps_in_order() -> None:
         "open brave and vs code side by side, brave left 50%, vs code right",
         brain=brain,
         bus=bus,
+        apps=apps,  # full reflex chain wired — guard declines → brain composes
+        windows=windows,
     )
 
     assert run.tier == "brain", f"expected brain + bridge, got {run.tier}"
@@ -454,3 +468,43 @@ def test_c_idiom_does_not_break_single_window_close() -> None:
     assert classify("close chrome").kind is WindowIntentKind.CLOSE
     assert classify("close notepad").kind is WindowIntentKind.CLOSE
     assert classify("close this window").kind is WindowIntentKind.CLOSE
+
+
+# ==========================================================================
+# Compound guard (issue 17 gap): both sides through the REAL stack
+# ==========================================================================
+
+
+class _Offline:
+    def is_online(self) -> bool:
+        return False
+
+
+def test_compound_single_open_still_hits_apps_reflex() -> None:
+    """The guard is one-sided: a plain "open spotify" is NOT compound, so the
+    apps reflex still owns it — the brain must not be involved."""
+    launches: list[str] = []
+    run = run_pack(
+        "open spotify",
+        brain=FakeBrain(script=[]),  # empty script → raises if the brain runs
+        apps=_apps(launches),
+    )
+    assert run.tier == "apps", f"single open must stay reflex, got {run.tier}"
+    assert launches == ["spotify"]
+    assert run.elapsed_s < REFLEX_BUDGET_S
+
+
+def test_compound_offline_degrades_without_half_executing() -> None:
+    """Offline, a compound command reaches the brain gate and degrades to
+    BRAIN_UNREACHABLE — the apps reflex must never fire the first clause."""
+    launches: list[str] = []
+    run = run_pack(
+        "open spotify and play the next music",
+        brain=FakeBrain(script=[]),
+        apps=_apps(launches),
+        connectivity=_Offline(),
+    )
+    assert run.tier == "brain", f"expected brain gate, got {run.tier}"
+    assert run.result.error == "brain_unreachable"
+    assert not run.result.ok
+    assert launches == [], "reflex half-executed a compound command offline"

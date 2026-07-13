@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from jarvis.brain.base import Brain
+from jarvis.compound import is_compound_command
 from jarvis.confirm import Confirmer, ask_brain, sanitize_user_command
 from jarvis.plain_replies import (
     BRAIN_EXCEPTION,
@@ -151,6 +152,15 @@ def handle_command(
     Brave window if one is running; only launches if nothing is open. Say
     “open a new brave window” to force another instance.
 
+    Compound guard (issue 17): a genuinely multi-step utterance — a conjunction
+    followed by a second action verb (“open spotify and play the next music”)
+    or a two-window arrangement (“open brave and vs code side by side”) — skips
+    every reflex below the memory tier and routes to the brain + MCP tool
+    bridge, which composes the whole task instead of a leading reflex
+    half-executing the first clause. Single-fact memory notes and everyday
+    “play rock and roll” / “open command and conquer” utterances are untouched
+    (see :func:`jarvis.compound.is_compound_command`).
+
     Failures are always spoken in plain language (never silent, never a stack
     trace). When *connectivity* reports offline, the cloud brain is not called
     and JARVIS says its brain is unreachable — local Google reads still work if
@@ -238,12 +248,23 @@ def handle_command(
             _audit_result(audit, result, path="memory")
             return result
 
+    # Compound-command guard (issue 17 gap): a genuinely multi-step utterance
+    # ("open spotify and play the next music") must be COMPOSED by the brain +
+    # MCP tool bridge, not half-executed by a single leading reflex that grabs
+    # the first clause. Placed here — AFTER the memory reflex so single-fact
+    # "remember … and …" notes stay local, but BEFORE Google/apps/system/media/
+    # windows/spotify so none of those tiers can partially run it. When
+    # ``compound`` is True every reflex below is skipped and the command routes
+    # to the brain; offline it degrades to BRAIN_UNREACHABLE (never a silent
+    # half-execute). The detector is conservative (see jarvis.compound).
+    compound = is_compound_command(text)
+
     offline = connectivity is not None and not connectivity.is_online()
 
     # Gmail/Calendar before the brain. Live Google needs the network; when
     # offline, refuse reads in plain language (no HTTP hang). Fake sample data
     # sets works_offline=True so demos still answer.
-    if google is not None:
+    if google is not None and not compound:
         works_offline = bool(getattr(google, "works_offline", False))
         if offline and not works_offline:
             try:
@@ -312,7 +333,7 @@ def handle_command(
                 return result
 
     # Smart app open before media/brain: focus existing window, else launch once.
-    if apps is not None:
+    if apps is not None and not compound:
         try:
             a_result = apps.try_handle(text)
         except Exception as exc:  # noqa: BLE001 — boundary
@@ -333,7 +354,7 @@ def handle_command(
 
     # System controls (issue 16): screen brightness + "open the last screen
     # recording". Reflex fast path — non-destructive, offline-safe, no brain.
-    if system is not None:
+    if system is not None and not compound:
         try:
             sys_result = system.try_handle(text)
         except Exception as exc:  # noqa: BLE001 — boundary: never crash the REPL
@@ -354,7 +375,7 @@ def handle_command(
 
     # Local media before Spotify/brain: real disk search + OS open. Offline-safe.
     # Music-shaped utterances return None so Spotify still owns playlists/skip.
-    if media is not None:
+    if media is not None and not compound:
         try:
             m_media = media.try_handle(text)
         except Exception as exc:  # noqa: BLE001 — boundary: never crash the REPL
@@ -374,7 +395,7 @@ def handle_command(
             return result
 
     # Win32 window control (focus / min / max / fullscreen / close). Offline-safe.
-    if windows is not None:
+    if windows is not None and not compound:
         try:
             w_result = windows.try_handle(text)
         except Exception as exc:  # noqa: BLE001 — boundary
@@ -397,7 +418,7 @@ def handle_command(
     # network; setup pointers ("not configured" / "not signed in") are local,
     # so only a signed-in live controller is gated when offline. Fakes set
     # works_offline=True so demos still answer.
-    if spotify is not None:
+    if spotify is not None and not compound:
         works_offline = bool(getattr(spotify, "works_offline", False))
         needs_network = bool(
             getattr(spotify, "configured", True)
