@@ -18,6 +18,7 @@ from jarvis.events import (
     BrainSelected,
     ConfirmRequested,
     Fault,
+    ListeningChanged,
     StateChanged,
     StepFailed,
     StepFinished,
@@ -146,6 +147,48 @@ def test_new_turn_clears_previous_ledger_and_fault() -> None:
     assert snap.steps == ()
     assert snap.fault_latched is False
     assert snap.token_ticks == 0
+
+
+def test_listening_changed_drives_mic_shutter_state() -> None:
+    s = SpineSurface()
+    assert s.snapshot().mic_muted is False  # listening by default
+
+    # Not listening (resident paused) -> privacy-shutter should close.
+    s.handle_event(ListeningChanged(listening=False))
+    assert s.snapshot().mic_muted is True
+
+    # Listening again (resumed) -> shutter opens.
+    s.handle_event(ListeningChanged(listening=True))
+    assert s.snapshot().mic_muted is False
+
+
+def test_mic_mute_is_independent_of_a_new_turn() -> None:
+    # Mute is a front-door state, not a per-command latch: a new turn must not
+    # clear it (and in practice HEARD cannot fire while deaf).
+    s = SpineSurface()
+    s.handle_event(ListeningChanged(listening=False))
+    s.apply_state(OverlayState.HEARD, transcript="ignored while deaf")
+    assert s.snapshot().mic_muted is True
+
+
+def test_resident_pause_publishes_listening_changed_to_surface() -> None:
+    """The exact cli wiring: resident.on_state_change -> bus -> SPINE surface."""
+    from jarvis.events import EventBus
+    from jarvis.resident import ResidentController
+
+    bus = EventBus()
+    s = SpineSurface()
+    bus.subscribe(SpineSubscriber(s))
+
+    resident = ResidentController()
+    resident.on_state_change = lambda state: bus.publish(
+        ListeningChanged(listening=(state == "running"))
+    )
+
+    resident.pause()
+    assert s.snapshot().mic_muted is True  # shutter closed while paused
+    resident.resume()
+    assert s.snapshot().mic_muted is False  # shutter open while running
 
 
 def test_rest_hides_plate() -> None:
@@ -282,6 +325,38 @@ def test_spine_widget_paints_from_surface() -> None:
         snap = w._snap
         assert snap.brain == "CLAUDE"
         assert snap.steps[0].name == "Bash"
+    finally:
+        w.close()
+
+
+def test_spine_widget_shutter_closes_and_reveals_when_muted() -> None:
+    pytest.importorskip("PySide6")
+    from PySide6 import QtWidgets
+
+    from jarvis.overlay.spine import SpineOverlay
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    w = SpineOverlay()
+    try:
+        # Idle + listening: shutter open, plate wants to be hidden.
+        for _ in range(10):
+            w._tick()
+        assert w.shutter < 0.1
+        assert w._reveal_to == 0.0
+
+        # Not listening (resident paused): shutter drives closed and the plate
+        # reveals so the closed privacy-shutter is actually visible.
+        w._apply_event(ListeningChanged(listening=False))
+        for _ in range(30):
+            w._tick()
+        assert w.shutter > 0.8
+        assert w._reveal_to == 1.0
+
+        # Resume: shutter reopens.
+        w._apply_event(ListeningChanged(listening=True))
+        for _ in range(30):
+            w._tick()
+        assert w.shutter < 0.2
     finally:
         w.close()
 

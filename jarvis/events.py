@@ -125,6 +125,18 @@ class TaskCompleted:
 
 
 @dataclass(frozen=True)
+class ListeningChanged:
+    """The front door's listening state flipped (resident pause/resume).
+
+    ``listening`` is False while paused (the mic is verifiably deaf — privacy)
+    and True while running. Drives the SPINE mic privacy-shutter: closed when
+    not listening, open when listening.
+    """
+
+    listening: bool
+
+
+@dataclass(frozen=True)
 class AuditRecord:
     """One audit-log record riding the bus (name + JSON-able details).
 
@@ -196,6 +208,7 @@ __all__ = [
     "ConfirmRequested",
     "EventBus",
     "Fault",
+    "ListeningChanged",
     "StateChanged",
     "StepFailed",
     "StepFinished",

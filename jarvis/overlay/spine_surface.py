@@ -16,6 +16,7 @@ brain readout                BrainSelected
 fault state                  Fault / StepFailed
 commit ring                  ConfirmRequested (until the confirm resolves)
 green success pulse          TaskCompleted(ok=True)
+mic privacy-shutter          ListeningChanged (closed while not listening)
 ===========================  ==============================================
 
 Lifecycle base state / transcript / voice level arrive through
@@ -37,6 +38,7 @@ from jarvis.events import (
     BrainSelected,
     ConfirmRequested,
     Fault,
+    ListeningChanged,
     StateChanged,
     StepFailed,
     StepFinished,
@@ -113,6 +115,7 @@ class SpineSnapshot:
     fault_events: int
     commit_ring: bool
     commit_prompt: str
+    mic_muted: bool
     token_chars: int
     token_ticks: int
     last_token_text: str
@@ -147,6 +150,9 @@ class SpineSurface:
         self.fault_events: int = 0
         self.commit_ring: bool = False
         self.commit_prompt: str = ""
+        # Mic privacy-shutter: True while the front door is NOT listening
+        # (resident paused). Real state, not a decorative animation.
+        self.mic_muted: bool = False
         # Thought ticker (real token activity feeds the odometer / rate).
         self.token_chars: int = 0
         self.token_ticks: int = 0
@@ -173,6 +179,7 @@ class SpineSurface:
                 fault_events=self.fault_events,
                 commit_ring=self.commit_ring,
                 commit_prompt=self.commit_prompt,
+                mic_muted=self.mic_muted,
                 token_chars=self.token_chars,
                 token_ticks=self.token_ticks,
                 last_token_text=self.last_token_text,
@@ -244,6 +251,8 @@ class SpineSurface:
                 self._fault(event)
             elif isinstance(event, TaskCompleted):
                 self._task_completed(event)
+            elif isinstance(event, ListeningChanged):
+                self._listening_changed(event)
             # StateChanged is delivered via apply_state (attach_overlay path).
         except Exception:  # noqa: BLE001 — subscriber isolation, belt & suspenders
             pass
@@ -346,6 +355,12 @@ class SpineSurface:
                 or getattr(event, "prompt", "")
                 or ""
             )
+            self._touch()
+
+    def _listening_changed(self, event: object) -> None:
+        with self._lock:
+            listening = bool(getattr(event, "listening", True))
+            self.mic_muted = not listening
             self._touch()
 
     def _task_completed(self, event: object) -> None:

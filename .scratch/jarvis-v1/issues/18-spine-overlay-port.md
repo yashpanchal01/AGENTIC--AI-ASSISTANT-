@@ -112,3 +112,67 @@ Deviations/flags:
   up if/when `Fault` is emitted.
 - The ledger is dynamic (real step names/badges), not the prototype's fixed
   5-step script; tool badges are derived from the live step name.
+
+### 2026-07-13 — Wired the three dormant surfaces to real signals
+
+Follow-up: the three surfaces that were ported as machinery with no producer now
+encode REAL data (no decorative/fake animation).
+
+1. **Fault publisher.** Producer added at the terminal `result` boundary in
+   `jarvis/brain/stream_json.py`: when a brain turn ends not-ok (error subtype /
+   `error` field / rate-limit), it emits `TaskCompleted(ok=False)` **and** a
+   single `Fault`. This is the exact failure counterpart of the green success
+   pulse (`TaskCompleted(ok=True)`), at the same command/task-level boundary —
+   distinct from a mid-task `StepFailed`: a tool step can fail and the turn still
+   recover to ok=True, in which case NO Fault fires (verified by test). One
+   `result` per turn ⇒ at most one Fault ⇒ no double-firing. This covers the
+   Claude brain path (the only producer of the success pulse too); command-level
+   errors outside a Claude turn (offline pre-check, exceptions) keep their
+   existing plain-spoken error path and are deliberately not re-published as
+   Fault to avoid noise.
+
+2. **Mic privacy-shutter.** New minimal event `ListeningChanged(listening: bool)`
+   in `jarvis/events.py`. `cli.py` wires `ResidentController.on_state_change` to
+   publish it on the shared bus (paused ⇒ `listening=False`; running ⇒ True) —
+   the tray keeps wrapping the same hook, so both fire. The SPINE surface tracks
+   `mic_muted`; the widget drives `self.shutter` closed (red) while not
+   listening and open while listening. Because the daemon idles at REST (plate
+   hidden), the plate now also *reveals* while muted so the closed shutter is
+   actually visible, with a "muted — not listening" transcript hint.
+
+3. **Arm-countdown / commit ring.** No code change: the port has a single
+   arming surface — the commit ring — already driven by the real
+   `ConfirmRequested` and resolved when the confirm flow leaves CONFIRM or the
+   turn completes (`TaskCompleted`). There is no separate dormant arm-countdown
+   or fabricated timer to drive or hide; the prototype's per-step arm-countdown
+   was folded into the commit ring at the original port. The ring's rotating
+   sweep is an indeterminate "awaiting your yes/no" spinner gated on the real
+   pending-confirm state, not a countdown-to-auto-commit. Confirmed + covered by
+   existing tests (`test_confirm_requested_shows_ring_until_resolved`,
+   `test_task_completed_resolves_pending_ring`).
+
+Files changed:
+- `jarvis/events.py` — add `ListeningChanged` event (+ `__all__`).
+- `jarvis/brain/stream_json.py` — emit `Fault` on a not-ok terminal `result`.
+- `jarvis/overlay/spine_surface.py` — `mic_muted` state + `ListeningChanged`
+  handler + snapshot field + mapping-table doc.
+- `jarvis/overlay/spine.py` — drive `self.shutter` from `mic_muted`, reveal the
+  plate while muted, muted transcript hint, mute/unmute in the GUI smoke trace.
+- `jarvis/cli.py` — publish `ListeningChanged` from `resident.on_state_change`.
+- `tests/test_step_streaming.py` — Fault emitted on failed result; recovered
+  StepFailure emits NO Fault; failing Claude turn publishes one Fault on the bus.
+- `tests/test_spine_overlay.py` — `ListeningChanged` drives `mic_muted`; mute is
+  turn-independent; resident-pause→bus→surface integration; widget shutter
+  closes/reveals then reopens.
+
+Tests: 376 → 383 (default suite green, quota-safe — no real Claude calls). GUI
+smoke: offscreen subprocess drives the fake trace incl. mute/unmute, prints
+`SMOKE OK`, exits 0, zero QPainter warnings.
+
+Deviations/flags:
+- Rate-limited turns now latch the fault surface (they end ok=False) — correct,
+  a usage-limit hit is a real failure.
+- Fault scope is intentionally the Claude brain-turn boundary (symmetric with
+  the success pulse), not every possible command-level failure; broadening to
+  offline/exception paths would need the bus threaded into `core`/`tasks` and
+  risks double-firing, so it was left out per "stay minimal / avoid noise".

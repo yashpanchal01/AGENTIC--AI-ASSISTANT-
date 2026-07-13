@@ -1275,6 +1275,16 @@ def main(argv: list[str] | None = None) -> int:
 
         resident = ResidentController(audit=audit)
 
+        # Drive the SPINE mic privacy-shutter from the REAL front-door state:
+        # paused = verifiably deaf = shutter closed; running = listening = open.
+        # Published on the shared bus so the overlay reflects it (issue 18).
+        def _publish_listening(state: str) -> None:
+            from jarvis.events import ListeningChanged
+
+            bus.publish(ListeningChanged(listening=(state == "running")))
+
+        resident.on_state_change = _publish_listening
+
         def _daemon_work(overlay=None) -> int:
             return run_daemon(
                 config=config,

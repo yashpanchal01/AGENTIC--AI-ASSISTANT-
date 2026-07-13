@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from jarvis.events import (
+    Fault,
     StepFailed,
     StepFinished,
     StepStarted,
@@ -125,6 +126,18 @@ class StreamParseState:
             self._emit(
                 TaskCompleted(reply=self.result_text, ok=self.ok, error=self.error)
             )
+            # Command/task-level failure boundary (issue 18 wiring): the terminal
+            # ``result`` came back not-ok (error subtype, rate limit, or an error
+            # field) — the failure counterpart of the green success pulse. Emit a
+            # single Fault here, NOT per mid-task StepFailed: a tool step may fail
+            # and the turn still recover to ok=True, in which case no Fault fires.
+            if not self.ok:
+                self._emit(
+                    Fault(
+                        error=self.error or "task failed",
+                        detail=(self.result_text or "")[:200],
+                    )
+                )
 
     def _emit(self, event: object) -> None:
         """Hand *event* to the observer; a broken observer never breaks parsing."""

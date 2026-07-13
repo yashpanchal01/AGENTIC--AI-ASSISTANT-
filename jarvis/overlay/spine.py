@@ -135,6 +135,7 @@ SUCCESS_RGB = (66, 235, 120)
 SUCCESS_HOLD = 1.5
 FAULT_FLASH_HOLD = 1.6
 ARMED_HINT = 'standing by — say "jarvis"'
+MUTED_HINT = "muted — not listening (resume to wake)"
 SN = "SN.2077-113"
 NC = "NC-077/YP"
 GLYPHS = "!<>-_\\/[]{}=+*^?#$%&@01"
@@ -443,8 +444,15 @@ class SpineOverlay(QWidget):
 
         vis = self._visual()
 
-        # reveal: show while active, fade out at REST
-        want = 1.0 if snap.active else 0.0
+        # mic privacy-shutter: closed (1.0) while not listening (resident
+        # paused), open (0.0) while listening. Real state — not decorative.
+        shutter_target = 1.0 if snap.mic_muted else 0.0
+        self.shutter += (shutter_target - self.shutter) * 0.20
+
+        # reveal: show while active, fade out at REST. Also reveal while muted so
+        # the closed privacy-shutter is actually visible (the daemon otherwise
+        # idles at REST with the plate hidden).
+        want = 1.0 if (snap.active or snap.mic_muted) else 0.0
         if abs(want - self._reveal_to) > 0.001:
             self._reveal_target(
                 want, 0.42 if want > 0 else 0.3, ease_out_back if want > 0 else ease_out_cubic
@@ -751,6 +759,9 @@ class SpineOverlay(QWidget):
         elif vis is SpineVisual.FAULT and snap.fault_text:
             txt = snap.fault_text
             p.setPen(RD(220))
+        elif snap.mic_muted:
+            txt = MUTED_HINT
+            p.setPen(AMB(200))
         elif vis is SpineVisual.ARMED and not snap.transcript:
             txt = ARMED_HINT
             p.setPen(GRY(150))
@@ -975,6 +986,7 @@ class SpineOverlay(QWidget):
         from jarvis.events import (
             BrainSelected,
             ConfirmRequested,
+            ListeningChanged,
             StepFinished,
             StepStarted,
             TaskCompleted,
@@ -982,6 +994,9 @@ class SpineOverlay(QWidget):
         )
 
         self._smoke_steps = [
+            # Privacy-shutter closes while paused (not listening), then opens.
+            lambda: self._apply_event(ListeningChanged(listening=False)),
+            lambda: self._apply_event(ListeningChanged(listening=True)),
             lambda: self.set_state(OverlayState.ARMED, level=0.5),
             lambda: self.set_state(
                 OverlayState.HEARD, transcript="play focus mix and log gpu temps"
