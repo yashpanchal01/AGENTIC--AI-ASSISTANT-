@@ -24,9 +24,15 @@ All issues: `Status: ready-for-agent`.
 | 16 | [issues/16-system-controls-brightness-latest-file.md](./issues/16-system-controls-brightness-latest-file.md) | 13 | |
 | 17 | [issues/17-acceptance-pack-canonical-tasks.md](./issues/17-acceptance-pack-canonical-tasks.md) | 14, 15, 16 | |
 | 18 | [issues/18-spine-overlay-port.md](./issues/18-spine-overlay-port.md) | 12, 15, 17 | **last** |
+| 19 | [issues/19-perception-tools.md](./issues/19-perception-tools.md) | — | yes |
+| 20 | [issues/20-conversation-context.md](./issues/20-conversation-context.md) | — | yes |
+| 21 | [issues/21-gated-shell-file-tools.md](./issues/21-gated-shell-file-tools.md) | 19 | |
+| 22 | [issues/22-grok-tool-bridge.md](./issues/22-grok-tool-bridge.md) | 21 | |
+| 23 | [issues/23-fault-event-breadth.md](./issues/23-fault-event-breadth.md) | — | **last** (catches 19/21/22 failure sources for free) |
 
 ## Next
 
 Fresh session per issue → `/implement` with the PRD + one issue file.  
 v1 wave (01–11): unblocked were **01** and **02**.  
-v1.1 wave (12–18, from the backend audit): unblocked now: **12** and **13**; overlay port **18** goes last.
+v1.1 wave (12–18, from the backend audit): done (14 shelved).  
+v1.2 wave (19–23, "make it smart"): perception → context → gated hands → Grok parity → fault polish. Build order: **19**, **20** (either order) → **21** → **22** → **23** last.
