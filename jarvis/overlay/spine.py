@@ -14,7 +14,7 @@ the animation clocks. Events arrive on the bus/worker thread and are marshalled
 onto the UI thread via Qt signals — Qt is never touched off the UI thread
 (the Aurora pattern).
 
-Selected via the ``overlay_style = "spine"`` setting; Aurora stays the default.
+Default overlay; Aurora remains available via ``overlay_style = "aurora"``.
 """
 
 from __future__ import annotations

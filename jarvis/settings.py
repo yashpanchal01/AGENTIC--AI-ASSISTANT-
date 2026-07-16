@@ -44,7 +44,7 @@ class UserSettings:
     piper_exe: str | None = None
     # Spotify developer-app client ID (issue 09) — an ID, not a secret.
     spotify_client_id: str | None = None
-    # Overlay face (issue 18): "aurora" (default) or "spine".
+    # Overlay face (issue 18): "spine" (default) or "aurora".
     overlay_style: str | None = None
     raw: dict[str, Any] | None = None
 

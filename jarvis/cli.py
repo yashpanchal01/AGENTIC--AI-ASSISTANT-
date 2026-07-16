@@ -952,7 +952,7 @@ def _run_with_qt_overlay(
     enable_tray: bool = False,
     use_overlay: bool = True,
     bus=None,
-    overlay_style: str = "aurora",
+    overlay_style: str = "spine",
 ) -> int:
     """Run *work(overlay)* on a worker thread while the Qt event loop paints.
 
