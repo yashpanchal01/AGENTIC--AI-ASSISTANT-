@@ -222,6 +222,7 @@ class LongTaskService:
         speaking_min_s: float = 0.0,
         threshold_s: float | None = None,
         audit: Any = None,
+        bus: Any = None,
     ) -> CommandResult:
         """Run brain.ask with timeout-race backgrounding.
 
@@ -230,6 +231,11 @@ class LongTaskService:
 
         Ask-first (issue 06): if the foreground turn needs confirmation, run the
         same core gate (never background a confirmation prompt).
+
+        Fault breadth (issue 23): foreground outcomes fault through the core
+        seam (the caller audits the returned result); only a BACKGROUNDED
+        turn's final failure publishes here, via *bus*, when the watcher
+        announces it — same classification, still one Fault per failed turn.
         """
         from jarvis.core import CommandResult, handle_confirmation
 
@@ -379,6 +385,7 @@ class LongTaskService:
                 overlay,
                 speaking_min_s,
                 text,
+                bus,
             ),
             name=f"jarvis-long-task-watch-{gen}",
             daemon=True,
@@ -403,6 +410,7 @@ class LongTaskService:
         overlay: Overlay | None,
         speaking_min_s: float,
         transcript: str,
+        bus: Any = None,
     ) -> None:
         from jarvis.core import CommandResult
 
@@ -493,6 +501,12 @@ class LongTaskService:
             "task_failed" if not ok else "task_completed"
         )
         self._audit_final(event, result, command=command)
+        # Backgrounded final failure faults once here (issue 23) — the "On it."
+        # ack the caller audited was ok=True, so the core seam stayed silent.
+        # Cancels / declines are excluded by the shared classification.
+        from jarvis.core import publish_fault
+
+        publish_fault(bus, result)
 
         with self._lock:
             if self._generation != gen:

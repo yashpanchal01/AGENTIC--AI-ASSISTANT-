@@ -79,6 +79,7 @@ def listen_and_handle(
     long_task_threshold_s: float | None = None,
     audit=None,
     dialogue=None,
+    bus=None,
 ) -> ListenResult:
     """Record until silence, transcribe raw text, feed handle_command.
 
@@ -159,6 +160,7 @@ def listen_and_handle(
             long_task_threshold_s=long_task_threshold_s,
             audit=audit,
             dialogue=dialogue,
+            bus=bus,
         )
     finally:
         _maybe_unload_stt(transcriber, unload=defer_unload)

@@ -95,6 +95,8 @@ class FrontDoorSession:
     # Issue 20: shared dialogue thread — the resident session owns the working
     # memory so context survives across cycles. None → created lazily.
     dialogue: Any = None  # DialogueThread | None
+    # Issue 23: shared event bus so any tier's failed turn faults the overlay.
+    bus: Any = None  # EventBus | None
 
     _stop: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
     _hotkey_event: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
@@ -243,6 +245,7 @@ class FrontDoorSession:
             "long_task_threshold_s": self.long_task_threshold_s,
             "audit": self.audit,
             "dialogue": self.dialogue,
+            "bus": self.bus,
         }
         if self.heard_dwell_s is not None:
             kwargs["heard_dwell_s"] = self.heard_dwell_s

@@ -126,6 +126,7 @@ def handle_command_with_overlay(
     long_task_threshold_s: float | None = None,
     audit=None,
     dialogue=None,
+    bus=None,
 ) -> CommandResult:
     """Run handle_command while showing heard → working → speaking → rest.
 
@@ -168,6 +169,7 @@ def handle_command_with_overlay(
             long_task_threshold_s=long_task_threshold_s,
             audit=audit,
             dialogue=dialogue,
+            bus=bus,
         )
         keep_working = bool(result.backgrounded) or result.error == "busy"
         if keep_working:
@@ -202,6 +204,7 @@ def listen_and_handle_with_overlay(
     long_task_threshold_s: float | None = None,
     audit=None,
     dialogue=None,
+    bus=None,
 ) -> ListenResult:
     """Full voice cycle: armed while recording, then heard → working → speaking → rest.
 
@@ -306,6 +309,7 @@ def listen_and_handle_with_overlay(
                 long_task_threshold_s=long_task_threshold_s,
                 audit=audit,
                 dialogue=dialogue,
+                bus=bus,
             )
         finally:
             _maybe_unload_stt(transcriber, unload=defer_unload)

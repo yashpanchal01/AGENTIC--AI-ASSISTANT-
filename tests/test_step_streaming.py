@@ -140,10 +140,10 @@ def test_tool_result_error_emits_step_failed() -> None:
     assert "locked" in failed.error
 
 
-def test_failed_result_emits_fault_after_task_completed() -> None:
-    # A terminal result that came back not-ok (error subtype + error field) is
-    # the command/task-level failure boundary: TaskCompleted(ok=False) then a
-    # single Fault (the failure counterpart of the green success pulse).
+def test_failed_result_emits_no_fault_at_parse_level() -> None:
+    # A terminal result that came back not-ok still emits TaskCompleted(ok=False),
+    # but NO Fault here: fault publication was hoisted from this brain result
+    # boundary to the core seam (issue 23) so every tier shares one publisher.
     lines = [
         _line(
             {
@@ -157,10 +157,8 @@ def test_failed_result_emits_fault_after_task_completed() -> None:
     parse_stream_json_lines(lines, on_event=events.append)
 
     completed = [e for e in events if isinstance(e, TaskCompleted)]
-    faults = [e for e in events if isinstance(e, Fault)]
     assert len(completed) == 1 and completed[0].ok is False
-    assert len(faults) == 1
-    assert "rate limit" in faults[0].error.lower()
+    assert not any(isinstance(e, Fault) for e in events)
 
 
 def test_recovered_step_failure_does_not_emit_fault() -> None:
@@ -305,8 +303,13 @@ emit({"type": "result", "subtype": "error_during_execution",
 """
 
 
-def test_failed_claude_turn_publishes_fault_on_the_bus(tmp_path: Path) -> None:
-    """A real (scripted, no-network) failing brain turn publishes one Fault."""
+def test_failed_claude_turn_publishes_exactly_one_fault(tmp_path: Path) -> None:
+    """A real (scripted, no-network) failing brain turn through the full
+    ``handle_command`` path publishes exactly one Fault — regression for the
+    issue 23 hoist (no double-fire from a leftover brain-boundary publisher)."""
+    from jarvis.core import handle_command
+    from jarvis.tts.fake import FakeSpeaker
+
     script = tmp_path / "fake_claude_fail.py"
     script.write_text(_FAKE_CLAUDE_FAIL, encoding="utf-8")
 
@@ -317,9 +320,11 @@ def test_failed_claude_turn_publishes_fault_on_the_bus(tmp_path: Path) -> None:
     brain = ClaudeCodeBrain(config=JarvisConfig(), bus=bus)
     brain._build_args = lambda body: [sys.executable, "-u", str(script)]  # type: ignore[method-assign]
 
-    turn = brain.ask("do the thing")
+    result = handle_command(
+        "do the thing", brain=brain, speaker=FakeSpeaker(), bus=bus
+    )
 
-    assert turn.ok is False
+    assert result.ok is False
     faults = [e for e in events if isinstance(e, Fault)]
     assert len(faults) == 1
     assert "disk full" in faults[0].error.lower()

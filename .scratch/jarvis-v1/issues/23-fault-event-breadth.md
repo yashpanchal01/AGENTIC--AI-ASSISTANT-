@@ -41,3 +41,51 @@ Out: new overlay visuals (SPINE's fault surface exists and works); per-step mid-
 ## User stories covered
 
 None — v1.2 polish debt (deferred from issue 18 wiring, commit 6c025c5)
+
+## Comments
+
+### 2026-07-16 — implemented (agent, left in tree for review; not committed)
+
+Fault publication hoisted to the one seam where every tier's outcome already
+lands — the same `_audit_result` helper that issue 20's `_record_dialogue`
+rides — and the brain-boundary publisher removed. Summary:
+
+- **One classification point:** `jarvis.core.should_fault(result)` +
+  `_NON_FAULT_ERRORS`. Honest `ok=False` failures fault
+  (`brightness_unsupported`, `no_window`/`not_running`, `not_found`,
+  timeouts, `brain_unreachable`/`spotify_unreachable`/`google_unreachable`,
+  `rate_limited`, exception names, unknown codes — fail-visible default).
+  Deliberate non-actions never fault: `denied=True` (secret/hard-deny),
+  `confirmation_declined`/`confirmation_incomplete`, `cancelled`, `busy`,
+  `already_finished`, `not_configured`/`not_signed_in` setup pointers,
+  `empty_transcript`. Unit-test table in `tests/test_handle_command.py`.
+- **One publication point:** `jarvis.core.publish_fault(bus, result)` fires
+  from `_audit_result` (all reflex/google/spotify/offline/brain/long-task
+  returns) plus one explicit call on the confirm-gate return — the exact
+  `_record_dialogue` pattern. `handle_confirmation`'s internal audit stays
+  bus-less so confirm results fault once, at the caller.
+- **Brain publisher removed:** `StreamParseState.ingest` no longer emits
+  `Fault` on a failed `result` (6c025c5 relocated); `TaskCompleted(ok=False)`
+  unchanged. Regression test drives a scripted failing CLI through the full
+  `handle_command` path: `StepStarted → StepFailed → TaskCompleted → Fault`,
+  exactly one Fault — mid-turn `StepFailed` (incl. issue 19/21 bridge tools)
+  never faults, only the turn's final outcome.
+- **Long tasks:** foreground failures fault through the core seam like any
+  turn; a BACKGROUNDED turn's final failure publishes once from
+  `_watch_and_announce` (next to the `task_failed` audit) via the same
+  classifier — the "On it." ack is ok=True so the core seam stays silent.
+  Green `TaskCompleted` pulse untouched.
+- **Plumbing:** `bus=` threaded as an optional kwarg alongside `audit=`:
+  `handle_command`, `LongTaskService.handle_brain`, `voice.listen_and_handle`,
+  `overlay/lifecycle` (both wrappers), `wake/pipeline.run_armed_pipeline`,
+  `FrontDoorSession` (new field), and `cli.py`
+  (run_once/run_listen/run_repl/run_daemon + all `main()` call sites) — so
+  the resident daemon, --listen, --once, and the REPL all fault for real.
+
+Verified live (no mocks on the seam): fake adapters forced to fail produced
+exactly one `Fault` each for brightness-unsupported, app-launch no-window,
+offline `brain_unreachable`, failed brain turn, and backgrounded long-task
+failure; secret deny / declined confirm / Spotify "not set up" / success
+produced zero. SPINE offscreen smoke (`JARVIS_SPINE_SMOKE=1`,
+`run_spine_smoke`) exits 0: "SMOKE OK: MK.I SPINE drove a full event trace
+clean". Suite: 540 passed, 15 deselected (baseline 511 + 29 new, all green).

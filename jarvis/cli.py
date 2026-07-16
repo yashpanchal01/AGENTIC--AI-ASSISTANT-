@@ -459,6 +459,7 @@ def run_once(
     confirmer=None,
     long_task_threshold_s: float | None = None,
     audit=None,
+    bus=None,
 ) -> int:
     if confirmer is None:
         confirmer = make_confirmer(interactive=sys.stdin.isatty(), overlay=overlay)
@@ -483,6 +484,7 @@ def run_once(
             confirmer=confirmer,
             long_task_threshold_s=long_task_threshold_s,
             audit=audit,
+            bus=bus,
         )
     else:
         result = handle_command(
@@ -501,6 +503,7 @@ def run_once(
             confirmer=confirmer,
             long_task_threshold_s=long_task_threshold_s,
             audit=audit,
+            bus=bus,
         )
     _print_result(result)
     # --once used to return on "On it." and exit the process, which killed the
@@ -576,6 +579,7 @@ def run_listen(
     long_task_threshold_s: float | None = None,
     audit=None,
     dialogue=None,
+    bus=None,
 ) -> int:
     if announce:
         print("Listening… (speak a command; ends on silence)")
@@ -611,6 +615,7 @@ def run_listen(
                 long_task_threshold_s=long_task_threshold_s,
                 audit=audit,
                 dialogue=dialogue,
+                bus=bus,
             )
         else:
             outcome = listen_and_handle(
@@ -632,6 +637,7 @@ def run_listen(
                 long_task_threshold_s=long_task_threshold_s,
                 audit=audit,
                 dialogue=dialogue,
+                bus=bus,
             )
     except RuntimeError as e:
         print(f"JARVIS> voice error: {e}", file=sys.stderr)
@@ -688,6 +694,7 @@ def run_daemon(
     announce: bool = True,
     resident=None,
     audit=None,
+    bus=None,
 ) -> int:
     """Continuous wake + hotkey loop. Returns 0 after clean stop / max_cycles."""
     from jarvis.wake.session import FrontDoorSession
@@ -750,6 +757,7 @@ def run_daemon(
         resident=resident,
         audit=audit,
         dialogue=dialogue,
+        bus=bus,
     )
 
     def on_cycle(cycle) -> None:
@@ -817,6 +825,7 @@ def run_repl(
     connectivity=None,
     long_tasks=None,
     audit=None,
+    bus=None,
 ) -> int:
     print(
         "JARVIS  "
@@ -927,6 +936,7 @@ def run_repl(
                 long_task_threshold_s=config.long_task_threshold_s,
                 audit=audit,
                 dialogue=dialogue,
+                bus=bus,
             )
             continue
 
@@ -947,6 +957,7 @@ def run_repl(
             long_task_threshold_s=config.long_task_threshold_s,
             audit=audit,
             dialogue=dialogue,
+            bus=bus,
         )
         _print_result(result)
 
@@ -1344,6 +1355,7 @@ def main(argv: list[str] | None = None) -> int:
                 announce=True,
                 resident=resident,
                 audit=audit,
+                bus=bus,
             )
 
         # Tray and/or overlay need a Qt app. Prefer that path when either is on.
@@ -1391,6 +1403,7 @@ def main(argv: list[str] | None = None) -> int:
                     unload_stt_after=config.unload_stt_between_commands,
                     long_task_threshold_s=config.long_task_threshold_s,
                     audit=audit,
+                    bus=bus,
                 ),
                 bus=bus,
                 overlay_style=config.overlay_style,
@@ -1413,6 +1426,7 @@ def main(argv: list[str] | None = None) -> int:
             unload_stt_after=config.unload_stt_between_commands,
             long_task_threshold_s=config.long_task_threshold_s,
             audit=audit,
+            bus=bus,
         )
 
     if args.once is not None:
@@ -1434,6 +1448,7 @@ def main(argv: list[str] | None = None) -> int:
                     long_tasks=long_tasks,
                     long_task_threshold_s=config.long_task_threshold_s,
                     audit=audit,
+                    bus=bus,
                 ),
                 bus=bus,
                 overlay_style=config.overlay_style,
@@ -1453,6 +1468,7 @@ def main(argv: list[str] | None = None) -> int:
             long_tasks=long_tasks,
             long_task_threshold_s=config.long_task_threshold_s,
             audit=audit,
+            bus=bus,
         )
 
     if args.overlay and not args.daemon:
@@ -1478,6 +1494,7 @@ def main(argv: list[str] | None = None) -> int:
         connectivity=connectivity,
         long_tasks=long_tasks,
         audit=audit,
+        bus=bus,
     )
 
 

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from jarvis.brain.base import Brain
 from jarvis.compound import is_compound_command
 from jarvis.confirm import Confirmer, ask_brain, sanitize_user_command
+from jarvis.events import Fault
 from jarvis.plain_replies import (
     BRAIN_EXCEPTION,
     BRAIN_UNREACHABLE,
@@ -124,6 +125,7 @@ def handle_command(
     long_task_threshold_s: float | None = None,
     audit: Any = None,
     dialogue: DialogueThread | None = None,
+    bus: Any = None,
 ) -> CommandResult:
     """Run one command through memory / Google / media / Spotify (if matched) or the brain, then speak.
 
@@ -191,6 +193,13 @@ def handle_command(
     silence longer than the thread's staleness threshold, the thread clears
     and ``brain.reset_session()`` starts a fresh conversation. Reflex-only
     turns never spawn a brain process just to record context.
+
+    Fault breadth (issue 23): when *bus* is provided, the turn's FINAL failed
+    outcome — whatever tier produced it — publishes exactly one
+    :class:`~jarvis.events.Fault` (SPINE flashes red) at the same seam that
+    records audit + dialogue. Deliberate non-actions (declined confirms,
+    secret refusals, hard-denies, "not set up" pointers, cancels) never
+    fault; see :func:`should_fault`.
     """
     text = (transcript_text or "").strip()
     if not text:
@@ -202,7 +211,7 @@ def handle_command(
             error="empty_transcript",
         )
         _audit(audit, "command_received", transcript="")
-        _audit_result(audit, result, path="empty")
+        _audit_result(audit, result, path="empty", bus=bus)
         return result
 
     # Strip spoof CONFIRMED: prefixes from user text (never authorize).
@@ -215,7 +224,7 @@ def handle_command(
             error="empty_transcript",
         )
         _audit(audit, "command_received", transcript="")
-        _audit_result(audit, result, path="empty")
+        _audit_result(audit, result, path="empty", bus=bus)
         return result
 
     _audit(audit, "command_received", transcript=text)
@@ -253,10 +262,12 @@ def handle_command(
                 speaking_min_s=speaking_min_s,
                 threshold_s=long_task_threshold_s,
                 audit=audit,
+                bus=bus,
             )
             _audit_result(
-            audit, result, path="long_task", dialogue=dialogue, utterance=text
-        )
+                audit, result, path="long_task", dialogue=dialogue,
+                utterance=text, bus=bus,
+            )
             return result
 
     # Markdown long-term memory (issue 07): local notes answer before Google
@@ -274,13 +285,15 @@ def handle_command(
                 error=type(exc).__name__,
             )
             _audit_result(
-                audit, result, path="memory", dialogue=dialogue, utterance=text
+                audit, result, path="memory", dialogue=dialogue,
+                utterance=text, bus=bus,
             )
             return result
         if m_result is not None:
             result = _finish_handler(m_result, speaker=speaker)
             _audit_result(
-                audit, result, path="memory", dialogue=dialogue, utterance=text
+                audit, result, path="memory", dialogue=dialogue,
+                utterance=text, bus=bus,
             )
             return result
 
@@ -329,11 +342,11 @@ def handle_command(
                             ok=False,
                             error=type(exc).__name__,
                         )
-                        _audit_result(audit, result, path="google", dialogue=dialogue, utterance=text)
+                        _audit_result(audit, result, path="google", dialogue=dialogue, utterance=text, bus=bus)
                         return result
                     if g_result is not None:
                         result = _finish_handler(g_result, speaker=speaker)
-                        _audit_result(audit, result, path="google", dialogue=dialogue, utterance=text)
+                        _audit_result(audit, result, path="google", dialogue=dialogue, utterance=text, bus=bus)
                         return result
                 else:
                     reply = (
@@ -347,7 +360,7 @@ def handle_command(
                         ok=False,
                         error="google_unreachable",
                     )
-                    _audit_result(audit, result, path="google", dialogue=dialogue, utterance=text)
+                    _audit_result(audit, result, path="google", dialogue=dialogue, utterance=text, bus=bus)
                     return result
         else:
             try:
@@ -361,11 +374,11 @@ def handle_command(
                     ok=False,
                     error=type(exc).__name__,
                 )
-                _audit_result(audit, result, path="google", dialogue=dialogue, utterance=text)
+                _audit_result(audit, result, path="google", dialogue=dialogue, utterance=text, bus=bus)
                 return result
             if g_result is not None:
                 result = _finish_handler(g_result, speaker=speaker)
-                _audit_result(audit, result, path="google", dialogue=dialogue, utterance=text)
+                _audit_result(audit, result, path="google", dialogue=dialogue, utterance=text, bus=bus)
                 return result
 
     # Smart app open before media/brain: focus existing window, else launch once.
@@ -381,11 +394,11 @@ def handle_command(
                 ok=False,
                 error=type(exc).__name__,
             )
-            _audit_result(audit, result, path="apps", dialogue=dialogue, utterance=text)
+            _audit_result(audit, result, path="apps", dialogue=dialogue, utterance=text, bus=bus)
             return result
         if a_result is not None:
             result = _finish_handler(a_result, speaker=speaker)
-            _audit_result(audit, result, path="apps", dialogue=dialogue, utterance=text)
+            _audit_result(audit, result, path="apps", dialogue=dialogue, utterance=text, bus=bus)
             return result
 
     # System controls (issue 16): screen brightness + "open the last screen
@@ -402,11 +415,11 @@ def handle_command(
                 ok=False,
                 error=type(exc).__name__,
             )
-            _audit_result(audit, result, path="system", dialogue=dialogue, utterance=text)
+            _audit_result(audit, result, path="system", dialogue=dialogue, utterance=text, bus=bus)
             return result
         if sys_result is not None:
             result = _finish_handler(sys_result, speaker=speaker)
-            _audit_result(audit, result, path="system", dialogue=dialogue, utterance=text)
+            _audit_result(audit, result, path="system", dialogue=dialogue, utterance=text, bus=bus)
             return result
 
     # Local media before Spotify/brain: real disk search + OS open. Offline-safe.
@@ -423,11 +436,11 @@ def handle_command(
                 ok=False,
                 error=type(exc).__name__,
             )
-            _audit_result(audit, result, path="media", dialogue=dialogue, utterance=text)
+            _audit_result(audit, result, path="media", dialogue=dialogue, utterance=text, bus=bus)
             return result
         if m_media is not None:
             result = _finish_handler(m_media, speaker=speaker)
-            _audit_result(audit, result, path="media", dialogue=dialogue, utterance=text)
+            _audit_result(audit, result, path="media", dialogue=dialogue, utterance=text, bus=bus)
             return result
 
     # Win32 window control (focus / min / max / fullscreen / close). Offline-safe.
@@ -443,11 +456,11 @@ def handle_command(
                 ok=False,
                 error=type(exc).__name__,
             )
-            _audit_result(audit, result, path="windows", dialogue=dialogue, utterance=text)
+            _audit_result(audit, result, path="windows", dialogue=dialogue, utterance=text, bus=bus)
             return result
         if w_result is not None:
             result = _finish_handler(w_result, speaker=speaker)
-            _audit_result(audit, result, path="windows", dialogue=dialogue, utterance=text)
+            _audit_result(audit, result, path="windows", dialogue=dialogue, utterance=text, bus=bus)
             return result
 
     # Spotify playback before the brain (issue 09). Live control needs the
@@ -480,7 +493,7 @@ def handle_command(
                     ok=False,
                     error="spotify_unreachable",
                 )
-                _audit_result(audit, result, path="spotify", dialogue=dialogue, utterance=text)
+                _audit_result(audit, result, path="spotify", dialogue=dialogue, utterance=text, bus=bus)
                 return result
         else:
             try:
@@ -494,11 +507,11 @@ def handle_command(
                     ok=False,
                     error=type(exc).__name__,
                 )
-                _audit_result(audit, result, path="spotify", dialogue=dialogue, utterance=text)
+                _audit_result(audit, result, path="spotify", dialogue=dialogue, utterance=text, bus=bus)
                 return result
             if s_result is not None:
                 result = _finish_handler(s_result, speaker=speaker)
-                _audit_result(audit, result, path="spotify", dialogue=dialogue, utterance=text)
+                _audit_result(audit, result, path="spotify", dialogue=dialogue, utterance=text, bus=bus)
                 return result
 
     if offline:
@@ -510,7 +523,7 @@ def handle_command(
             ok=False,
             error="brain_unreachable",
         )
-        _audit_result(audit, result, path="brain", dialogue=dialogue, utterance=text)
+        _audit_result(audit, result, path="brain", dialogue=dialogue, utterance=text, bus=bus)
         return result
 
     # Long-task path: timeout race + cancel (issue 10). Confirmation gate runs
@@ -525,9 +538,11 @@ def handle_command(
             speaking_min_s=speaking_min_s,
             threshold_s=long_task_threshold_s,
             audit=audit,
+            bus=bus,
         )
         _audit_result(
-            audit, result, path="long_task", dialogue=dialogue, utterance=text
+            audit, result, path="long_task", dialogue=dialogue,
+            utterance=text, bus=bus,
         )
         return result
 
@@ -547,7 +562,7 @@ def handle_command(
             ok=False,
             error=error,
         )
-        _audit_result(audit, result, path="brain", dialogue=dialogue, utterance=text)
+        _audit_result(audit, result, path="brain", dialogue=dialogue, utterance=text, bus=bus)
         return result
 
     # Ask-first gate: propose → confirm → re-ask, or cancel (issue 06).
@@ -563,7 +578,10 @@ def handle_command(
             confirmer=confirmer,
             audit=audit,
         )
+        # Same seam pattern as _record_dialogue: handle_confirmation audits
+        # internally (without the bus), so the single Fault fires here.
         _record_dialogue(dialogue, text, result, path="confirm")
+        publish_fault(bus, result)
         return result
 
     reply = (turn.reply or "").strip()
@@ -594,7 +612,7 @@ def handle_command(
         ok=turn.ok if error != "brain_unreachable" else False,
         error=error,
     )
-    _audit_result(audit, result, path="brain", dialogue=dialogue, utterance=text)
+    _audit_result(audit, result, path="brain", dialogue=dialogue, utterance=text, bus=bus)
     return result
 
 
@@ -773,10 +791,14 @@ def _audit_result(
     path: str,
     dialogue: Any = None,
     utterance: str = "",
+    bus: Any = None,
 ) -> None:
     # Dialogue thread (issue 20) shares the audit seam so every tier's outcome
     # is recorded exactly once, without a second scatter of call sites.
     _record_dialogue(dialogue, utterance, result, path=path)
+    # Fault breadth (issue 23) rides the same seam: any tier's FINAL failed
+    # outcome flashes the overlay exactly once — reflex, offline, or brain.
+    publish_fault(bus, result)
     if audit is None:
         return
     actions = [
@@ -795,6 +817,59 @@ def _audit_result(
         session_id=result.session_id,
         backgrounded=result.backgrounded,
     )
+
+
+# Deliberate non-actions (issue 23): declining, refusing, or pointing at setup
+# is JARVIS working correctly — the overlay must not flash red for them. Every
+# other ok=False outcome is an honest failure and faults (fail-visible default:
+# unknown error codes flash rather than lie by omission).
+_NON_FAULT_ERRORS = frozenset(
+    {
+        "empty_transcript",  # nothing to act on — no action failed
+        "confirmation_declined",  # user said no (ask-first working)
+        "confirmation_incomplete",  # unclear go-ahead → safe cancel
+        "cancelled",  # user aborted on purpose
+        "busy",  # still-working refusal, not a failure
+        "already_finished",  # cancel raced a completed task
+        "not_configured",  # "Spotify isn't set up" pointer
+        "not_signed_in",  # setup pointer (Spotify / Google login)
+    }
+)
+
+
+def should_fault(result: CommandResult) -> bool:
+    """True when *result* is an honest failure the overlay must flash (issue 23).
+
+    One classification point for every tier: reflex, offline, brain, long-task.
+    ``denied=True`` (secret tier / hard-deny) never faults — a refusal is
+    correct behavior, not a failure.
+    """
+    if result.ok:
+        return False
+    if result.denied:
+        return False
+    return (result.error or "") not in _NON_FAULT_ERRORS
+
+
+def publish_fault(bus: Any, result: CommandResult) -> None:
+    """Publish exactly one Fault for a failed turn's FINAL outcome (issue 23).
+
+    Hoisted from the brain result boundary (commit 6c025c5) so every tier
+    shares one publication point — never per mid-turn StepFailed (a step can
+    fail and the turn still recover). The bus is observability, not control
+    flow: a broken bus never breaks the turn.
+    """
+    if bus is None or not should_fault(result):
+        return
+    try:
+        bus.publish(
+            Fault(
+                error=result.error or "command failed",
+                detail=(result.reply or "")[:200],
+            )
+        )
+    except Exception:  # noqa: BLE001 — bus is observability, never control flow
+        pass
 
 
 # Brain-tier turns that never actually reached a CLI process (local deny /

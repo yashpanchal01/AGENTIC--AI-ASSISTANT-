@@ -35,4 +35,4 @@ All issues: `Status: ready-for-agent`.
 Fresh session per issue → `/implement` with the PRD + one issue file.  
 v1 wave (01–11): unblocked were **01** and **02**.  
 v1.1 wave (12–18, from the backend audit): done (14 shelved).  
-v1.2 wave (19–23, "make it smart"): perception → context → gated hands → Grok parity → fault polish. Build order: **19**, **20** (either order) → **21** → **22** → **23** last.
+v1.2 wave (19–23, "make it smart"): perception → context → gated hands → fault polish → Grok parity. Build order: **19**, **20** (either order) → **21** → **23** → **22** last (user hold 2026-07-16: start 22 only on their explicit go).
