@@ -92,6 +92,9 @@ class FrontDoorSession:
     # Issue 11: pause gate + audit trail (optional; tests inject MemoryAuditLog).
     resident: Any = None  # ResidentController | None
     audit: Any = None
+    # Issue 20: shared dialogue thread — the resident session owns the working
+    # memory so context survives across cycles. None → created lazily.
+    dialogue: Any = None  # DialogueThread | None
 
     _stop: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
     _hotkey_event: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
@@ -211,6 +214,12 @@ class FrontDoorSession:
                 )
             else:
                 self.long_tasks = LongTaskService(audit=self.audit)
+        # Lazily create the shared dialogue thread (issue 20) so follow-ups
+        # across cycles have a referent even when the caller passed none.
+        if self.dialogue is None:
+            from jarvis.dialogue import DialogueThread
+
+            self.dialogue = DialogueThread()
         kwargs: dict[str, Any] = {
             "recorder": self.recorder,
             "transcriber": self.transcriber,
@@ -233,6 +242,7 @@ class FrontDoorSession:
             "unload_stt_after": self.unload_stt_after,
             "long_task_threshold_s": self.long_task_threshold_s,
             "audit": self.audit,
+            "dialogue": self.dialogue,
         }
         if self.heard_dwell_s is not None:
             kwargs["heard_dwell_s"] = self.heard_dwell_s

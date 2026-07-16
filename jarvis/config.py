@@ -188,6 +188,9 @@ class JarvisConfig:
     unload_stt_between_commands: bool = False
     # Long tasks (issue 10): background brain turns that exceed this many seconds.
     long_task_threshold_s: float = 20.0
+    # Conversation context (issue 20): silence gap in minutes after which the
+    # dialogue thread clears and the brain session resets (fresh conversation).
+    dialogue_stale_minutes: float = 10.0
     # Overlay face (issue 18): "spine" (default MK.I SPINE instrument plate) or
     # "aurora" (Mono pill). Override with JARVIS_OVERLAY_STYLE or the settings key.
     overlay_style: str = "spine"
@@ -243,6 +246,10 @@ class JarvisConfig:
             long_thresh = float(os.environ.get("JARVIS_LONG_TASK_S", "20"))
         except ValueError:
             long_thresh = 20.0
+        try:
+            stale_min = float(os.environ.get("JARVIS_DIALOGUE_STALE_MINUTES", "10"))
+        except ValueError:
+            stale_min = 10.0
         overlay_style = os.environ.get("JARVIS_OVERLAY_STYLE", "spine").strip().lower()
         if overlay_style not in ("aurora", "spine"):
             overlay_style = "spine"
@@ -267,6 +274,7 @@ class JarvisConfig:
             check_connectivity=check_net,
             unload_stt_between_commands=unload_stt,
             long_task_threshold_s=long_thresh,
+            dialogue_stale_minutes=stale_min,
             overlay_style=overlay_style,
         )
         if apply_settings:

@@ -19,6 +19,7 @@ from jarvis.types import Action
 
 if TYPE_CHECKING:
     from jarvis.connectivity import Connectivity
+    from jarvis.dialogue import DialogueThread
     from jarvis.overlay.base import Overlay
     from jarvis.tasks import LongTaskService
 
@@ -122,6 +123,7 @@ def handle_command(
     speaking_min_s: float = 0.0,
     long_task_threshold_s: float | None = None,
     audit: Any = None,
+    dialogue: DialogueThread | None = None,
 ) -> CommandResult:
     """Run one command through memory / Google / media / Spotify (if matched) or the brain, then speak.
 
@@ -180,6 +182,15 @@ def handle_command(
 
     When *audit* is provided, command receipt, replies, actions, and errors are
     appended to the audit log (issue 11).
+
+    Conversation context (issue 20): when *dialogue* is provided, every tier's
+    outcome is appended to the shared :class:`~jarvis.dialogue.DialogueThread`
+    (at the audit seam), and brain-bound commands get a terse "recent
+    exchanges" digest of the turns the brain has NOT seen (reflex/offline
+    turns since its last real turn — ``--resume`` covers its own). After a
+    silence longer than the thread's staleness threshold, the thread clears
+    and ``brain.reset_session()`` starts a fresh conversation. Reflex-only
+    turns never spawn a brain process just to record context.
     """
     text = (transcript_text or "").strip()
     if not text:
@@ -209,6 +220,25 @@ def handle_command(
 
     _audit(audit, "command_received", transcript=text)
 
+    # Staleness reset (issue 20): a long silence means a fresh conversation —
+    # clear the dialogue thread AND drop the brain's resume id, like a person
+    # walking back into the room. reset_session only clears an id; it never
+    # spawns a process, so reflex-only sessions stay brain-free.
+    if dialogue is not None and dialogue.reset_if_stale():
+        reset = getattr(brain, "reset_session", None)
+        if callable(reset):
+            try:
+                reset()
+            except Exception:  # noqa: BLE001 — context hygiene must not break a turn
+                pass
+
+    # Brain-bound text carries the digest of turns the brain has not seen
+    # (empty on consecutive brain turns — no digest bloat). Computed once here
+    # from PRIOR turns; the current turn is appended at the audit seam below.
+    brain_text = text
+    if dialogue is not None:
+        brain_text = dialogue.compose_brain_command(text)
+
     # Cancel / busy must work even offline and before Google.
     if long_tasks is not None:
         from jarvis.tasks import is_cancel_utterance
@@ -224,7 +254,9 @@ def handle_command(
                 threshold_s=long_task_threshold_s,
                 audit=audit,
             )
-            _audit_result(audit, result, path="long_task")
+            _audit_result(
+            audit, result, path="long_task", dialogue=dialogue, utterance=text
+        )
             return result
 
     # Markdown long-term memory (issue 07): local notes answer before Google
@@ -241,11 +273,15 @@ def handle_command(
                 ok=False,
                 error=type(exc).__name__,
             )
-            _audit_result(audit, result, path="memory")
+            _audit_result(
+                audit, result, path="memory", dialogue=dialogue, utterance=text
+            )
             return result
         if m_result is not None:
             result = _finish_handler(m_result, speaker=speaker)
-            _audit_result(audit, result, path="memory")
+            _audit_result(
+                audit, result, path="memory", dialogue=dialogue, utterance=text
+            )
             return result
 
     # Compound-command guard (issue 17 gap): a genuinely multi-step utterance
@@ -293,11 +329,11 @@ def handle_command(
                             ok=False,
                             error=type(exc).__name__,
                         )
-                        _audit_result(audit, result, path="google")
+                        _audit_result(audit, result, path="google", dialogue=dialogue, utterance=text)
                         return result
                     if g_result is not None:
                         result = _finish_handler(g_result, speaker=speaker)
-                        _audit_result(audit, result, path="google")
+                        _audit_result(audit, result, path="google", dialogue=dialogue, utterance=text)
                         return result
                 else:
                     reply = (
@@ -311,7 +347,7 @@ def handle_command(
                         ok=False,
                         error="google_unreachable",
                     )
-                    _audit_result(audit, result, path="google")
+                    _audit_result(audit, result, path="google", dialogue=dialogue, utterance=text)
                     return result
         else:
             try:
@@ -325,11 +361,11 @@ def handle_command(
                     ok=False,
                     error=type(exc).__name__,
                 )
-                _audit_result(audit, result, path="google")
+                _audit_result(audit, result, path="google", dialogue=dialogue, utterance=text)
                 return result
             if g_result is not None:
                 result = _finish_handler(g_result, speaker=speaker)
-                _audit_result(audit, result, path="google")
+                _audit_result(audit, result, path="google", dialogue=dialogue, utterance=text)
                 return result
 
     # Smart app open before media/brain: focus existing window, else launch once.
@@ -345,11 +381,11 @@ def handle_command(
                 ok=False,
                 error=type(exc).__name__,
             )
-            _audit_result(audit, result, path="apps")
+            _audit_result(audit, result, path="apps", dialogue=dialogue, utterance=text)
             return result
         if a_result is not None:
             result = _finish_handler(a_result, speaker=speaker)
-            _audit_result(audit, result, path="apps")
+            _audit_result(audit, result, path="apps", dialogue=dialogue, utterance=text)
             return result
 
     # System controls (issue 16): screen brightness + "open the last screen
@@ -366,11 +402,11 @@ def handle_command(
                 ok=False,
                 error=type(exc).__name__,
             )
-            _audit_result(audit, result, path="system")
+            _audit_result(audit, result, path="system", dialogue=dialogue, utterance=text)
             return result
         if sys_result is not None:
             result = _finish_handler(sys_result, speaker=speaker)
-            _audit_result(audit, result, path="system")
+            _audit_result(audit, result, path="system", dialogue=dialogue, utterance=text)
             return result
 
     # Local media before Spotify/brain: real disk search + OS open. Offline-safe.
@@ -387,11 +423,11 @@ def handle_command(
                 ok=False,
                 error=type(exc).__name__,
             )
-            _audit_result(audit, result, path="media")
+            _audit_result(audit, result, path="media", dialogue=dialogue, utterance=text)
             return result
         if m_media is not None:
             result = _finish_handler(m_media, speaker=speaker)
-            _audit_result(audit, result, path="media")
+            _audit_result(audit, result, path="media", dialogue=dialogue, utterance=text)
             return result
 
     # Win32 window control (focus / min / max / fullscreen / close). Offline-safe.
@@ -407,11 +443,11 @@ def handle_command(
                 ok=False,
                 error=type(exc).__name__,
             )
-            _audit_result(audit, result, path="windows")
+            _audit_result(audit, result, path="windows", dialogue=dialogue, utterance=text)
             return result
         if w_result is not None:
             result = _finish_handler(w_result, speaker=speaker)
-            _audit_result(audit, result, path="windows")
+            _audit_result(audit, result, path="windows", dialogue=dialogue, utterance=text)
             return result
 
     # Spotify playback before the brain (issue 09). Live control needs the
@@ -444,7 +480,7 @@ def handle_command(
                     ok=False,
                     error="spotify_unreachable",
                 )
-                _audit_result(audit, result, path="spotify")
+                _audit_result(audit, result, path="spotify", dialogue=dialogue, utterance=text)
                 return result
         else:
             try:
@@ -458,11 +494,11 @@ def handle_command(
                     ok=False,
                     error=type(exc).__name__,
                 )
-                _audit_result(audit, result, path="spotify")
+                _audit_result(audit, result, path="spotify", dialogue=dialogue, utterance=text)
                 return result
             if s_result is not None:
                 result = _finish_handler(s_result, speaker=speaker)
-                _audit_result(audit, result, path="spotify")
+                _audit_result(audit, result, path="spotify", dialogue=dialogue, utterance=text)
                 return result
 
     if offline:
@@ -474,14 +510,14 @@ def handle_command(
             ok=False,
             error="brain_unreachable",
         )
-        _audit_result(audit, result, path="brain")
+        _audit_result(audit, result, path="brain", dialogue=dialogue, utterance=text)
         return result
 
     # Long-task path: timeout race + cancel (issue 10). Confirmation gate runs
     # inside handle_brain for foreground propose turns (never backgrounded).
     if long_tasks is not None:
         result = long_tasks.handle_brain(
-            text,
+            brain_text,
             brain=brain,
             speaker=speaker,
             overlay=overlay,
@@ -490,11 +526,13 @@ def handle_command(
             threshold_s=long_task_threshold_s,
             audit=audit,
         )
-        _audit_result(audit, result, path="long_task")
+        _audit_result(
+            audit, result, path="long_task", dialogue=dialogue, utterance=text
+        )
         return result
 
     try:
-        turn = ask_brain(brain, text, confirmed=False)
+        turn = ask_brain(brain, brain_text, confirmed=False)
     except Exception as exc:  # noqa: BLE001 — boundary: never crash the REPL
         if looks_like_network_failure(exc):
             reply = BRAIN_UNREACHABLE
@@ -509,13 +547,15 @@ def handle_command(
             ok=False,
             error=error,
         )
-        _audit_result(audit, result, path="brain")
+        _audit_result(audit, result, path="brain", dialogue=dialogue, utterance=text)
         return result
 
     # Ask-first gate: propose → confirm → re-ask, or cancel (issue 06).
+    # The confirmed re-ask keeps brain_text so the digest still reaches the
+    # brain (the propose turn was answered locally without spawning it).
     if getattr(turn, "needs_confirmation", False) and not turn.denied:
         result = handle_confirmation(
-            text,
+            brain_text,
             turn,
             brain=brain,
             speaker=speaker,
@@ -523,6 +563,7 @@ def handle_command(
             confirmer=confirmer,
             audit=audit,
         )
+        _record_dialogue(dialogue, text, result, path="confirm")
         return result
 
     reply = (turn.reply or "").strip()
@@ -553,7 +594,7 @@ def handle_command(
         ok=turn.ok if error != "brain_unreachable" else False,
         error=error,
     )
-    _audit_result(audit, result, path="brain")
+    _audit_result(audit, result, path="brain", dialogue=dialogue, utterance=text)
     return result
 
 
@@ -725,7 +766,17 @@ def _audit(audit: Any, event: str, **details: Any) -> None:
         pass
 
 
-def _audit_result(audit: Any, result: CommandResult, *, path: str) -> None:
+def _audit_result(
+    audit: Any,
+    result: CommandResult,
+    *,
+    path: str,
+    dialogue: Any = None,
+    utterance: str = "",
+) -> None:
+    # Dialogue thread (issue 20) shares the audit seam so every tier's outcome
+    # is recorded exactly once, without a second scatter of call sites.
+    _record_dialogue(dialogue, utterance, result, path=path)
     if audit is None:
         return
     actions = [
@@ -744,6 +795,49 @@ def _audit_result(audit: Any, result: CommandResult, *, path: str) -> None:
         session_id=result.session_id,
         backgrounded=result.backgrounded,
     )
+
+
+# Brain-tier turns that never actually reached a CLI process (local deny /
+# declined confirm / unreachable / cancel-control) — the digest must keep
+# showing the reflex turns behind them.
+_BRAIN_NEVER_SAW = frozenset(
+    {
+        "brain_unreachable",
+        "confirmation_declined",
+        "confirmation_incomplete",
+        "cancelled",
+        "busy",
+        "claude_not_found",
+        "grok_not_found",
+    }
+)
+
+
+def _record_dialogue(
+    dialogue: Any, utterance: str, result: CommandResult, *, path: str
+) -> None:
+    """Append one turn to the shared thread (issue 20). Never breaks a turn."""
+    if dialogue is None or path == "empty" or not utterance:
+        return
+    if path in ("brain", "long_task", "confirm"):
+        tier = "offline" if result.error == "brain_unreachable" else "brain"
+        seen = (
+            tier == "brain"
+            and not result.denied
+            and result.error not in _BRAIN_NEVER_SAW
+        )
+    else:
+        tier, seen = "reflex", False
+    try:
+        dialogue.append(
+            utterance,
+            tier=tier,
+            reply=result.reply,
+            ok=result.ok,
+            seen_by_brain=seen,
+        )
+    except Exception:  # noqa: BLE001 — working memory is observability, not control
+        pass
 
 
 def _finish_handler(result: object, *, speaker: Speaker) -> CommandResult:

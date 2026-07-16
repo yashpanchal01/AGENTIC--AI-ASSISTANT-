@@ -46,6 +46,8 @@ class UserSettings:
     spotify_client_id: str | None = None
     # Overlay face (issue 18): "spine" (default) or "aurora".
     overlay_style: str | None = None
+    # Conversation staleness gap in minutes (issue 20); None → default (10).
+    dialogue_stale_minutes: float | None = None
     raw: dict[str, Any] | None = None
 
 
@@ -151,6 +153,16 @@ def parse_settings_dict(data: dict[str, Any]) -> UserSettings:
         if overlay_style not in ("aurora", "spine", None):
             overlay_style = None
 
+    stale_minutes: float | None = None
+    raw_stale = data.get("dialogue_stale_minutes")
+    if raw_stale is not None:
+        try:
+            stale_minutes = float(raw_stale)
+        except (TypeError, ValueError):
+            stale_minutes = None
+        if stale_minutes is not None and stale_minutes <= 0:
+            stale_minutes = None
+
     return UserSettings(
         hotkey=hotkey,
         enable_hotkey=enable_hotkey,
@@ -160,6 +172,7 @@ def parse_settings_dict(data: dict[str, Any]) -> UserSettings:
         piper_exe=piper_exe,
         spotify_client_id=spotify_client_id,
         overlay_style=overlay_style,
+        dialogue_stale_minutes=stale_minutes,
         raw=dict(data),
     )
 
@@ -189,6 +202,8 @@ def apply_user_settings(config: Any, settings: UserSettings | None = None) -> An
         updates["spotify_client_id"] = settings.spotify_client_id
     if settings.overlay_style is not None:
         updates["overlay_style"] = settings.overlay_style
+    if settings.dialogue_stale_minutes is not None:
+        updates["dialogue_stale_minutes"] = settings.dialogue_stale_minutes
     if not updates:
         return config
     # Dataclass replace keeps identity of other fields.

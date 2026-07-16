@@ -130,6 +130,7 @@ def run_armed_pipeline(
     speaking_min_s: float = DEFAULT_SPEAKING_MIN_S,
     long_task_threshold_s: float | None = None,
     audit=None,
+    dialogue=None,
 ) -> ListenResult:
     """Single command after arming (wake or hotkey). Shared entry point.
 
@@ -265,6 +266,7 @@ def run_armed_pipeline(
                     speaking_min_s=speaking_min_s,
                     long_task_threshold_s=long_task_threshold_s,
                     audit=audit,
+                    dialogue=dialogue,
                 )
             else:
                 result = handle_command(
@@ -283,6 +285,7 @@ def run_armed_pipeline(
                     confirmer=confirmer,
                     long_task_threshold_s=long_task_threshold_s,
                     audit=audit,
+                    dialogue=dialogue,
                 )
         finally:
             _maybe_unload_stt(transcriber, unload=defer_unload)

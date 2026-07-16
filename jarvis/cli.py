@@ -568,6 +568,7 @@ def run_listen(
     unload_stt_after: bool = False,
     long_task_threshold_s: float | None = None,
     audit=None,
+    dialogue=None,
 ) -> int:
     if announce:
         print("Listening… (speak a command; ends on silence)")
@@ -602,6 +603,7 @@ def run_listen(
                 unload_stt_after=unload_stt_after,
                 long_task_threshold_s=long_task_threshold_s,
                 audit=audit,
+                dialogue=dialogue,
             )
         else:
             outcome = listen_and_handle(
@@ -622,6 +624,7 @@ def run_listen(
                 unload_stt_after=unload_stt_after,
                 long_task_threshold_s=long_task_threshold_s,
                 audit=audit,
+                dialogue=dialogue,
             )
     except RuntimeError as e:
         print(f"JARVIS> voice error: {e}", file=sys.stderr)
@@ -709,6 +712,11 @@ def run_daemon(
         )
     _attach_bridge_confirmer(brain, confirmer)
 
+    # Shared working memory for the resident session (issue 20).
+    from jarvis.dialogue import DialogueThread
+
+    dialogue = DialogueThread(stale_after_s=config.dialogue_stale_minutes * 60.0)
+
     session = FrontDoorSession(
         detector=detector,
         recorder=recorder,
@@ -734,6 +742,7 @@ def run_daemon(
         long_task_threshold_s=config.long_task_threshold_s,
         resident=resident,
         audit=audit,
+        dialogue=dialogue,
     )
 
     def on_cycle(cycle) -> None:
@@ -862,6 +871,11 @@ def run_repl(
     # Brain tool bridge (issue 15) shares the REPL's stdin confirmer.
     _attach_bridge_confirmer(brain, make_confirmer(interactive=True))
 
+    # Shared working memory for the REPL session (issue 20).
+    from jarvis.dialogue import DialogueThread
+
+    dialogue = DialogueThread(stale_after_s=config.dialogue_stale_minutes * 60.0)
+
     while True:
         try:
             line = input("You> ").strip()
@@ -876,6 +890,7 @@ def run_repl(
         if line in (":n", ":new"):
             if hasattr(brain, "reset_session"):
                 brain.reset_session()
+            dialogue.clear()
             print("(new conversation)")
             continue
         if line in (":listen", ":v", ":voice"):
@@ -904,6 +919,7 @@ def run_repl(
                 unload_stt_after=config.unload_stt_between_commands,
                 long_task_threshold_s=config.long_task_threshold_s,
                 audit=audit,
+                dialogue=dialogue,
             )
             continue
 
@@ -923,6 +939,7 @@ def run_repl(
             confirmer=make_confirmer(interactive=True),
             long_task_threshold_s=config.long_task_threshold_s,
             audit=audit,
+            dialogue=dialogue,
         )
         _print_result(result)
 

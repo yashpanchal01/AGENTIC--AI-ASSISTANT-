@@ -47,3 +47,79 @@ Out: persistence across daemon restarts; long-term memory changes; UI display of
 ## User stories covered
 
 None — v1.2 "make it smart" wave (working-memory gap identified 2026-07-13 live testing)
+
+## Comments
+
+### 2026-07-16 — implemented (agent, left in tree for review; not committed)
+
+New module `jarvis/dialogue.py` (`DialogueThread` + frozen `DialogueTurn`),
+threaded through `handle_command` as an optional `dialogue=` kwarg. Summary:
+
+- **One seam, no scatter:** appends ride the existing audit seam —
+  `_audit_result` grew optional `dialogue`/`utterance` params and calls a new
+  `_record_dialogue` helper, so every tier's outcome is recorded exactly once
+  at the same places audit records already fire. The confirm-gate return in
+  `handle_command` (which had no `_audit_result` of its own) got an explicit
+  `_record_dialogue(..., path="confirm")`. `handle_confirmation` and
+  `LongTaskService` internals were NOT given the thread (their `_audit_result`
+  calls pass no dialogue), so a turn can never double-append.
+- **Tier mapping:** paths brain/long_task/confirm → tier `"brain"`
+  (`"offline"` when `error == "brain_unreachable"`); everything else →
+  `"reflex"`. `path="empty"` turns are skipped (nothing was said).
+- **seen_by_brain, not just tier:** the digest boundary is the last turn the
+  brain process actually *received*, not the last brain-tier turn. Local
+  denies (secrets), declined/incomplete confirmations, unreachable/cancel/busy
+  and CLI-not-found turns never spawn a CLI, so they stay digest-visible
+  (`_BRAIN_NEVER_SAW` set in core). Deviation from the naive "since last brain
+  turn" reading of the spec — otherwise "play X" (reflex) → "delete Y"
+  (declined) → "pause that" would silently lose the reflex context.
+- **Digest injection point:** `brain_text = dialogue.compose_brain_command(text)`
+  is computed once near the top of `handle_command` (from PRIOR turns only)
+  and used at the foreground `ask_brain`, the main `long_tasks.handle_brain`,
+  and passed into `handle_confirmation` so the confirmed re-ask still carries
+  it (the propose turn was answered locally without spawning the CLI). The
+  early cancel/busy long-task path deliberately keeps the raw text —
+  `is_cancel_utterance` matches exact phrases and a digest prefix would break
+  cancel routing. The spoken/recorded utterance is always the raw text.
+- **Digest format (token-tight):** header + `- user: "…" -> tier: "…" (ok|failed)`
+  per unseen turn + footer; utterance/reply whitespace-collapsed and truncated
+  to 80 chars, ring capped at 8 turns → worst case ~1.5 KB (test-asserted
+  < 1800 chars). Empty string on consecutive brain turns (no bloat;
+  `--resume` covers the brain's own turns).
+- **Staleness:** checked once per command at the top of `handle_command`;
+  `reset_if_stale()` clears the thread and, when true, core calls
+  `brain.reset_session()` (id drop only — never spawns a process, so
+  reflex-only sessions stay brain-free). Threshold from new
+  `JarvisConfig.dialogue_stale_minutes` (default 10) / env
+  `JARVIS_DIALOGUE_STALE_MINUTES` / settings key `dialogue_stale_minutes`
+  (non-positive or non-numeric values ignored). `DialogueThread.now` is
+  injectable for tests.
+- **Ownership/wiring:** like `audit`, the caller owns the thread —
+  `FrontDoorSession` gets a `dialogue` field (lazily created like
+  `long_tasks`; `run_daemon` passes one built from config), the REPL creates
+  one per session (`:new` clears it alongside `reset_session`), and
+  `run_listen`/`listen_and_handle`/`run_armed_pipeline`/overlay lifecycle all
+  pass it through. `run_once` stays dialogue-free (one turn per process —
+  nothing to remember). Issue-19 observe-state line in the digest: not done
+  (spec marked it optional); observe calls happen inside the brain's own
+  MCP turn, so `--resume` already covers them.
+- **Backgrounded long tasks:** recorded with the "On it." ack reply; the
+  eventual final reply is not retro-patched into the thread (kept simple —
+  the brain saw its own turn anyway via resume).
+- **Tests:** 415 passed / 13 deselected before → 431 passed / 13 deselected
+  after (16 new in tests/test_dialogue.py), quota-safe: brain turns run
+  against FakeBrain (args-inspection via `_history`) or a monkeypatched
+  `subprocess.Popen` fake Claude CLI emitting one stream-json result line
+  (argv-level proof, including `--resume` retention).
+- **Verified injected prompt** (scripted scenario, fake CLI `-p` argument
+  after "play dhurandar" reflex turn, 0 CLI spawns on the reflex turn):
+
+  ```
+  [Recent exchanges JARVIS handled locally (you did not see these):
+  - user: "play dhurandar" -> reflex: "Playing Dhurandar on Spotify." (ok)
+  The user now says:]
+  pause that thing
+  ```
+
+  The following "resume the music" brain turn spawned with prompt exactly
+  `resume the music` plus `--resume sess-demo` — no re-injection.
