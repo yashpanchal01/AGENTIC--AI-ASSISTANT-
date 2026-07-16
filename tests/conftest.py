@@ -101,4 +101,18 @@ def _hermetic_os_adapters(request, monkeypatch):
             open_fn=lambda path: None,
         ),
     )
+
+    from jarvis.perception import Observer
+
+    monkeypatch.setattr(
+        jarvis_cli,
+        "make_observer",
+        lambda config: Observer(
+            named_roots={},
+            approved_roots=(),
+            list_windows=lambda: [],
+            list_processes=lambda: [],
+            scan_files=lambda root: [],
+        ),
+    )
     yield

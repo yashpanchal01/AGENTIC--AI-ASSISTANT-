@@ -88,6 +88,10 @@ def test_tools_list_reports_all_tools(bridge: JarvisToolBridge) -> None:
         "system",
         "memory",
         "google_read",
+        "observe_windows",
+        "observe_processes",
+        "observe_files",
+        "observe_music",
     }
 
 

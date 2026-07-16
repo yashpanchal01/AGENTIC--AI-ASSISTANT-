@@ -338,6 +338,13 @@ def make_system(config: JarvisConfig):
     return build_system_handler(config)
 
 
+def make_observer(config: JarvisConfig):
+    """Read-only perception for the brain's observe_* tools (issue 19)."""
+    from jarvis.perception import build_observer
+
+    return build_observer(config)
+
+
 def make_memory(config: JarvisConfig, *, no_memory: bool = False):
     """Markdown long-term memory handler (issue 07), or None when disabled."""
     if no_memory:
@@ -1212,6 +1219,7 @@ def main(argv: list[str] | None = None) -> int:
             media=media,
             memory=memory,
             google=google,
+            observer=make_observer(config),
         )
     # Fake brain needs no network; skip connectivity pre-check so offline demos work.
     connectivity = None if use_fake else make_connectivity(config)

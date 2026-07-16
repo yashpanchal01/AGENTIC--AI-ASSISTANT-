@@ -136,6 +136,18 @@ def find_windows(
     return hits
 
 
+def foreground_hwnd() -> int:
+    """HWND of the current foreground window (0 when none / lock screen)."""
+    _require_win()
+    return int(user32.GetForegroundWindow() or 0)
+
+
+def is_minimized(hwnd: int) -> bool:
+    """True when *hwnd* is minimized (IsIconic)."""
+    _require_win()
+    return bool(user32.IsIconic(hwnd))
+
+
 def _force_foreground(hwnd: int) -> None:
     """Best-effort SetForegroundWindow (Windows often blocks plain calls)."""
     _require_win()

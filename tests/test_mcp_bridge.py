@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from jarvis.apps.handler import AppHandler
 from jarvis.brain.mcp_bridge import (
     CANCELLED_REPLY,
+    OBSERVE_TOOL_NAMES,
     SECRET_REFUSAL,
     TOOL_NAMES,
     JarvisToolBridge,
@@ -86,13 +87,23 @@ def test_tool_definitions_expose_the_domains() -> None:
         "system",
         "memory",
         "google_read",
+        "observe_windows",
+        "observe_processes",
+        "observe_files",
+        "observe_music",
     }
     for d in defs:
         schema = d["inputSchema"]
         assert schema["type"] == "object"
-        assert "command" in schema["properties"]
-        assert schema["required"] == ["command"]
         assert d["description"]
+        if d["name"] in OBSERVE_TOOL_NAMES:
+            # Perception tools (issue 19) take structured args, not the
+            # plain-English command envelope.
+            assert "command" not in schema["properties"]
+            assert schema["additionalProperties"] is False
+        else:
+            assert "command" in schema["properties"]
+            assert schema["required"] == ["command"]
 
 
 def test_allowed_tool_ids_are_namespaced() -> None:

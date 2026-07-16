@@ -31,6 +31,17 @@ Every side-effecting tool call passes through the SAME
 
 Each call emits :class:`StepStarted` then :class:`StepFinished` (or
 :class:`StepFailed` on error / denial / decline) on the bus.
+
+Perception (issue 19)
+---------------------
+The read-only ``observe_*`` tools (windows / processes / files / music) let
+the brain SEE current state before acting ("close that", "what's eating my
+RAM"). They are the first tool family with structured args (optional filters
+and limits) instead of the plain-English ``command`` envelope. Read-only ⇒ no
+confirm gate, but every call still writes an audit record (an
+:class:`~jarvis.events.AuditRecord` riding the bus) and emits the same Step*
+events as the act tools. Real OS access lives behind fakeable adapters in
+:mod:`jarvis.perception`.
 """
 
 from __future__ import annotations
@@ -49,7 +60,13 @@ from jarvis.confirm import (
     is_risky_request,
     is_secret_request,
 )
-from jarvis.events import ConfirmRequested, StepFailed, StepFinished, StepStarted
+from jarvis.events import (
+    AuditRecord,
+    ConfirmRequested,
+    StepFailed,
+    StepFinished,
+    StepStarted,
+)
 from jarvis.plain_replies import plain_error_reply
 
 # MCP protocol version we advertise when the client does not pin one.
@@ -121,7 +138,105 @@ _TOOLS: tuple[tuple[str, str], ...] = (
     ),
 )
 
-TOOL_NAMES: tuple[str, ...] = tuple(name for name, _ in _TOOLS)
+# Read-only perception tools (issue 19): name → description → input schema.
+# Unlike the act tools above these take STRUCTURED args (optional filters and
+# limits), not a plain-English ``command`` — so each carries its own schema.
+# No confirm gate (they change nothing), but every call still writes an audit
+# record and emits Step* events exactly like the act tools.
+_OBSERVE_TOOLS: tuple[tuple[str, str, dict[str, Any]], ...] = (
+    (
+        "observe_windows",
+        "List the open top-level windows right now: process, pid, title, "
+        "focused/minimized state. Read-only. Observe first when the user "
+        "refers to what's on screen ('close that', 'the other one').",
+        {
+            "type": "object",
+            "properties": {
+                "process": {
+                    "type": "string",
+                    "description": "Optional process-name filter, e.g. 'chrome'.",
+                },
+                "title": {
+                    "type": "string",
+                    "description": (
+                        "Optional case-insensitive title substring filter."
+                    ),
+                },
+            },
+            "additionalProperties": False,
+        },
+    ),
+    (
+        "observe_processes",
+        "List running processes with RAM use, sorted by RAM descending. "
+        "Read-only. Use for 'what's eating my RAM' style questions.",
+        {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": (
+                        "Optional case-insensitive process-name filter, "
+                        "e.g. 'chrome'."
+                    ),
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 25,
+                    "description": "Max rows to return (default 25).",
+                },
+            },
+            "additionalProperties": False,
+        },
+    ),
+    (
+        "observe_files",
+        "List recent files in a folder, newest first: name, size, modified "
+        "time. Read-only. Use to resolve 'the movie I downloaded last night' "
+        "before opening it with the media tool.",
+        {
+            "type": "object",
+            "properties": {
+                "folder": {
+                    "type": "string",
+                    "description": (
+                        "'downloads', 'desktop', 'documents', 'videos', or an "
+                        "approved-folder path."
+                    ),
+                },
+                "ext": {
+                    "type": "string",
+                    "description": "Optional extension filter, e.g. '.mp4'.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 25,
+                    "description": "Max rows to return (default 25).",
+                },
+            },
+            "required": ["folder"],
+            "additionalProperties": False,
+        },
+    ),
+    (
+        "observe_music",
+        "What's playing on Spotify right now (track, artist, playing/paused). "
+        "Read-only.",
+        {"type": "object", "properties": {}, "additionalProperties": False},
+    ),
+)
+
+OBSERVE_TOOL_NAMES: tuple[str, ...] = tuple(name for name, _, _ in _OBSERVE_TOOLS)
+TOOL_NAMES: tuple[str, ...] = (
+    tuple(name for name, _ in _TOOLS) + OBSERVE_TOOL_NAMES
+)
+
+# Guaranteed NOW_PLAYING per jarvis.spotify.intents — observe_music is a thin
+# read-only wrapper over the existing now-playing path (honest "not set up"
+# reply included) rather than a reimplementation.
+_NOW_PLAYING_COMMAND = "what's playing right now"
 
 
 def _command_schema(description: str) -> dict[str, Any]:
@@ -142,8 +257,8 @@ def _command_schema(description: str) -> dict[str, Any]:
 
 
 def tool_definitions() -> list[dict[str, Any]]:
-    """MCP ``tools/list`` payload for the six JARVIS domains."""
-    return [
+    """MCP ``tools/list`` payload: the act domains + the observe senses."""
+    defs: list[dict[str, Any]] = [
         {
             "name": name,
             "description": description,
@@ -151,11 +266,42 @@ def tool_definitions() -> list[dict[str, Any]]:
         }
         for name, description in _TOOLS
     ]
+    defs.extend(
+        {"name": name, "description": description, "inputSchema": schema}
+        for name, description, schema in _OBSERVE_TOOLS
+    )
+    return defs
 
 
 def allowed_tool_ids() -> list[str]:
-    """CLI ``--allowedTools`` identifiers for the six bridge tools."""
+    """CLI ``--allowedTools`` identifiers for every bridge tool."""
     return [f"mcp__{SERVER_NAME}__{name}" for name in TOOL_NAMES]
+
+
+# -- structured-arg helpers (observe tools) ----------------------------------
+
+
+def _opt_str(args: dict[str, Any], key: str) -> str | None:
+    value = args.get(key)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _opt_int(args: dict[str, Any], key: str) -> int | None:
+    value = args.get(key)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _args_detail(args: dict[str, Any]) -> str:
+    """Compact ``key=value`` rendering of structured args for Step*/overlay."""
+    return " ".join(f"{k}={v}" for k, v in args.items() if v not in (None, ""))
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +343,8 @@ class JarvisToolBridge:
     system: Any = None
     memory: Any = None
     google: Any = None
+    # Read-only perception (issue 19): a jarvis.perception.Observer (fakeable).
+    observer: Any = None
 
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     _httpd: Any = field(default=None, init=False, repr=False)
@@ -228,6 +376,11 @@ class JarvisToolBridge:
         The gate is authoritative: a secret request is hard-denied and a risky
         request that is not confirmed NEVER reaches the handler.
         """
+        if name in OBSERVE_TOOL_NAMES:
+            # Read-only senses (issue 19): no confirm gate, still serialized,
+            # still audited, still Step*-streamed.
+            with self._call_lock:
+                return self._call_observe(name, arguments or {})
         command = str((arguments or {}).get("command") or "").strip()
         # Serialize so confirm prompts and bus ordering never interleave when
         # the CLI fires overlapping tool calls.
@@ -313,6 +466,104 @@ class JarvisToolBridge:
         )
         return ToolCallResult(text=text, is_error=True, denied=denied, error=err)
 
+    # -- observe (read-only perception, issue 19) ----------------------------
+
+    def _call_observe(self, name: str, arguments: dict[str, Any]) -> ToolCallResult:
+        """One observe_* call: Started → run adapter → Finished/Failed + audit."""
+        detail = _args_detail(arguments)
+        self._publish(StepStarted(name=name, detail=detail))
+        try:
+            obs = self._run_observe(name, arguments)
+        except Exception as exc:  # noqa: BLE001 — boundary: speak plain, never crash
+            err = type(exc).__name__
+            self._audit_observe(name, arguments, ok=False, error=err)
+            self._publish(StepFailed(name=name, detail=detail, error=err))
+            return ToolCallResult(
+                text=plain_error_reply(err, fallback="I couldn't observe that."),
+                is_error=True,
+                error=err,
+            )
+        if obs is None:
+            self._audit_observe(name, arguments, ok=False, error="unavailable")
+            self._publish(StepFailed(name=name, detail=detail, error="unavailable"))
+            return ToolCallResult(
+                text=f"The {name} tool isn't available right now.",
+                is_error=True,
+                error="unavailable",
+            )
+        reply = (getattr(obs, "reply", "") or "").strip()
+        ok = bool(getattr(obs, "ok", True))
+        err = getattr(obs, "error", None)
+        rows = int(getattr(obs, "rows", 0) or 0)
+        self._audit_observe(name, arguments, ok=ok, error=err, rows=rows)
+        if ok:
+            # Detail is the compact header line — the bus feeds the overlay,
+            # which does not need the full row dump.
+            head = reply.splitlines()[0] if reply else detail
+            self._publish(StepFinished(name=name, detail=head))
+            return ToolCallResult(text=reply or "Nothing observed.", is_error=False)
+        self._publish(
+            StepFailed(name=name, detail=detail, error=str(err or "failed"))
+        )
+        text = reply or plain_error_reply(
+            str(err) if err else None, fallback="I couldn't observe that."
+        )
+        return ToolCallResult(text=text, is_error=True, error=err)
+
+    def _run_observe(self, name: str, arguments: dict[str, Any]) -> Any:
+        """Route one observe call into the Observer / Spotify slice, or None."""
+        if name == "observe_music":
+            spotify = self.spotify
+            if spotify is None:
+                return None
+            # Thin read-only wrapper over the existing now-playing path — the
+            # honest "not set up" reply comes straight from the controller.
+            return spotify.try_handle(_NOW_PLAYING_COMMAND)
+        observer = self.observer
+        if observer is None:
+            return None
+        if name == "observe_windows":
+            return observer.observe_windows(
+                process=_opt_str(arguments, "process"),
+                title=_opt_str(arguments, "title"),
+            )
+        if name == "observe_processes":
+            return observer.observe_processes(
+                name=_opt_str(arguments, "name"),
+                limit=_opt_int(arguments, "limit"),
+            )
+        if name == "observe_files":
+            return observer.observe_files(
+                folder=_opt_str(arguments, "folder") or "",
+                ext=_opt_str(arguments, "ext"),
+                limit=_opt_int(arguments, "limit"),
+            )
+        return None
+
+    def _audit_observe(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        ok: bool,
+        error: Any = None,
+        rows: int = 0,
+    ) -> None:
+        # Audit rides the bus like everything else (issue 12): the JSONL
+        # writer's AuditSubscriber picks the record up when audit is enabled.
+        self._publish(
+            AuditRecord(
+                name="observe",
+                details={
+                    "tool": name,
+                    "args": dict(arguments),
+                    "ok": ok,
+                    "error": str(error) if error else None,
+                    "rows": rows,
+                },
+            )
+        )
+
     # -- confirm gate -------------------------------------------------------
 
     @staticmethod
@@ -364,8 +615,11 @@ class JarvisToolBridge:
                     "serverInfo": {"name": SERVER_NAME, "version": "0.1.0"},
                     "instructions": (
                         "JARVIS's own tools: spotify, apps, windows, media, "
-                        "system, memory, google_read. Prefer them over shell for "
-                        "those domains. google_read is read-only."
+                        "system, memory, google_read, plus the read-only "
+                        "observe_windows / observe_processes / observe_files / "
+                        "observe_music senses. Prefer them over shell for those "
+                        "domains; observe current state first when a request "
+                        "refers to it. google_read is read-only."
                     ),
                 },
             )
@@ -549,6 +803,7 @@ class _MCPRequestHandler(BaseHTTPRequestHandler):
 
 __all__ = [
     "JarvisToolBridge",
+    "OBSERVE_TOOL_NAMES",
     "ToolCallResult",
     "TOOL_NAMES",
     "allowed_tool_ids",
