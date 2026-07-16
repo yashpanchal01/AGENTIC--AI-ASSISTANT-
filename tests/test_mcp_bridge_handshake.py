@@ -92,6 +92,8 @@ def test_tools_list_reports_all_tools(bridge: JarvisToolBridge) -> None:
         "observe_processes",
         "observe_files",
         "observe_music",
+        "run_command",
+        "file_op",
     }
 
 

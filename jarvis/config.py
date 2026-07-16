@@ -9,8 +9,10 @@ from pathlib import Path
 # Safe-tier tools: auto-run with zero prompts (prototype-validated list).
 # Ask-first tier (issue 06) is enforced in core/brain before tools run for
 # destructive/system/outward commands; secrets stay hard-denied always.
+# The CLI's own Bash is deliberately OFF (issue 21): raw shell would bypass
+# JARVIS's confirm gate + audit + bus — shell goes through the bridge's
+# run_command tool, where jarvis.brain.shell_policy decides the tier.
 DEFAULT_SAFE_TOOLS: tuple[str, ...] = (
-    "Bash",
     "Read",
     "Glob",
     "Grep",
@@ -53,7 +55,13 @@ CLAUDE_TOOL_BRIDGE_GUIDANCE = (
     "over raw shell commands for those domains — they are more reliable and speak "
     "the reply for you. For a multi-domain request, call them in order (e.g. open "
     "an app, then control its playback). google_read is read-only; JARVIS refuses "
-    "to send, reply, forward email, or create calendar events."
+    "to send, reply, forward email, or create calendar events. "
+    "For dev, git, and file work use run_command (one PowerShell command; JARVIS "
+    "gates the risk itself — read-only commands run at once, anything else asks "
+    "the user first, dangerous commands are refused) and file_op (move/rename/"
+    "copy/delete-to-Recycle-Bin/mkdir/zip/unzip inside the approved folders). "
+    "Still prefer the domain tools above over run_command for music, apps, "
+    "windows, and media."
 )
 
 # Appended for the Grok brain: it does NOT have the tool bridge (issue 15), so

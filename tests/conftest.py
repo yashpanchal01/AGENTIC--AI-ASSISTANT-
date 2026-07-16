@@ -115,4 +115,26 @@ def _hermetic_os_adapters(request, monkeypatch):
             scan_files=lambda root: [],
         ),
     )
+
+    from jarvis.hands import CommandOutput, Hands
+
+    # Inert hands (issue 21): CLI-driven tests can never run a real shell
+    # command, move a real file, or touch the real Recycle Bin. Empty jail
+    # roots means every file_op is refused before execution anyway.
+    monkeypatch.setattr(
+        jarvis_cli,
+        "make_hands",
+        lambda config: Hands(
+            roots=(),
+            run_shell=lambda command, cwd, timeout_s: CommandOutput(
+                stdout="", stderr="", returncode=0
+            ),
+            move_fn=lambda src, dst: None,
+            copy_fn=lambda src, dst: None,
+            mkdir_fn=lambda path: None,
+            zip_fn=lambda src, dst: None,
+            unzip_fn=lambda src, dst: None,
+            recycle_fn=lambda path: None,
+        ),
+    )
     yield

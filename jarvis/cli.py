@@ -345,6 +345,13 @@ def make_observer(config: JarvisConfig):
     return build_observer(config)
 
 
+def make_hands(config: JarvisConfig):
+    """Gated shell + file execution for run_command / file_op (issue 21)."""
+    from jarvis.hands import build_hands
+
+    return build_hands(config)
+
+
 def make_memory(config: JarvisConfig, *, no_memory: bool = False):
     """Markdown long-term memory handler (issue 07), or None when disabled."""
     if no_memory:
@@ -1237,6 +1244,7 @@ def main(argv: list[str] | None = None) -> int:
             memory=memory,
             google=google,
             observer=make_observer(config),
+            hands=make_hands(config),
         )
     # Fake brain needs no network; skip connectivity pre-check so offline demos work.
     connectivity = None if use_fake else make_connectivity(config)

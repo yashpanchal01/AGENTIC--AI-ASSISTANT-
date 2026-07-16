@@ -42,6 +42,19 @@ confirm gate, but every call still writes an audit record (an
 :class:`~jarvis.events.AuditRecord` riding the bus) and emits the same Step*
 events as the act tools. Real OS access lives behind fakeable adapters in
 :mod:`jarvis.perception`.
+
+Hands (issue 21)
+----------------
+``run_command`` (one PowerShell command) and ``file_op`` (structured
+move/rename/copy/delete/mkdir/zip/unzip) are the third tool family. The tier
+— auto-allow / confirm-first / hard-deny — is computed by
+:mod:`jarvis.brain.shell_policy` IN JARVIS CODE from the command/op alone;
+nothing the model says can reclassify a call. Confirm-first calls ride the
+same :class:`ConfirmRequested` flow as the act tools with a one-line preview;
+hard-denied calls return refusal text and never execute. ``file_op`` paths
+are jailed to the approved folders (symlinks/``..`` resolved first) and
+delete goes to the Recycle Bin, never a hard delete. Execution lives behind
+fakeable adapters in :mod:`jarvis.hands`.
 """
 
 from __future__ import annotations
@@ -52,8 +65,10 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 
+from jarvis.brain import shell_policy
 from jarvis.confirm import (
     confirmation_prompt,
     describe_risky_action,
@@ -228,9 +243,75 @@ _OBSERVE_TOOLS: tuple[tuple[str, str, dict[str, Any]], ...] = (
     ),
 )
 
+# Gated hands (issue 21): shell + file tools, structured args like the
+# observe family. The tier (allow/confirm/deny) is computed by
+# jarvis.brain.shell_policy in JARVIS code — the model never self-classifies.
+_SHELL_TOOLS: tuple[tuple[str, str, dict[str, Any]], ...] = (
+    (
+        "run_command",
+        "Run ONE PowerShell command on the user's machine (dev/git/file work). "
+        "Prefer the spotify/apps/windows/media/system tools for those domains — "
+        "use this for git, running tests, and developer file work. JARVIS "
+        "classifies the risk itself: read-only commands run at once, anything "
+        "else asks the user first, dangerous commands are refused. stdout and "
+        "stderr come back truncated.",
+        {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The PowerShell command line to run.",
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Optional working directory for the command.",
+                },
+                "timeout_s": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 300,
+                    "description": "Optional timeout in seconds (default 60).",
+                },
+            },
+            "required": ["command"],
+            "additionalProperties": False,
+        },
+    ),
+    (
+        "file_op",
+        "One structured file operation inside the user's approved folders: "
+        "move, rename, copy, delete (to the Recycle Bin, never a hard delete), "
+        "mkdir, zip, or unzip. Paths outside the approved folders are refused; "
+        "move/rename/delete/overwrite ask the user first.",
+        {
+            "type": "object",
+            "properties": {
+                "op": {
+                    "type": "string",
+                    "enum": list(shell_policy.FILE_OPS),
+                    "description": "Which operation to perform.",
+                },
+                "src": {
+                    "type": "string",
+                    "description": "Source path (the folder to create, for mkdir).",
+                },
+                "dst": {
+                    "type": "string",
+                    "description": (
+                        "Destination path (required for move/rename/copy/zip/unzip)."
+                    ),
+                },
+            },
+            "required": ["op", "src"],
+            "additionalProperties": False,
+        },
+    ),
+)
+
 OBSERVE_TOOL_NAMES: tuple[str, ...] = tuple(name for name, _, _ in _OBSERVE_TOOLS)
+SHELL_TOOL_NAMES: tuple[str, ...] = tuple(name for name, _, _ in _SHELL_TOOLS)
 TOOL_NAMES: tuple[str, ...] = (
-    tuple(name for name, _ in _TOOLS) + OBSERVE_TOOL_NAMES
+    tuple(name for name, _ in _TOOLS) + OBSERVE_TOOL_NAMES + SHELL_TOOL_NAMES
 )
 
 # Guaranteed NOW_PLAYING per jarvis.spotify.intents — observe_music is a thin
@@ -269,6 +350,10 @@ def tool_definitions() -> list[dict[str, Any]]:
     defs.extend(
         {"name": name, "description": description, "inputSchema": schema}
         for name, description, schema in _OBSERVE_TOOLS
+    )
+    defs.extend(
+        {"name": name, "description": description, "inputSchema": schema}
+        for name, description, schema in _SHELL_TOOLS
     )
     return defs
 
@@ -345,6 +430,8 @@ class JarvisToolBridge:
     google: Any = None
     # Read-only perception (issue 19): a jarvis.perception.Observer (fakeable).
     observer: Any = None
+    # Gated shell + file execution (issue 21): a jarvis.hands.Hands (fakeable).
+    hands: Any = None
 
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     _httpd: Any = field(default=None, init=False, repr=False)
@@ -381,6 +468,11 @@ class JarvisToolBridge:
             # still audited, still Step*-streamed.
             with self._call_lock:
                 return self._call_observe(name, arguments or {})
+        if name in SHELL_TOOL_NAMES:
+            # Gated hands (issue 21): tier decided by shell_policy in JARVIS
+            # code, confirm-first through the real confirmer, deny = refusal.
+            with self._call_lock:
+                return self._call_shell(name, arguments or {})
         command = str((arguments or {}).get("command") or "").strip()
         # Serialize so confirm prompts and bus ordering never interleave when
         # the CLI fires overlapping tool calls.
@@ -564,6 +656,154 @@ class JarvisToolBridge:
             )
         )
 
+    # -- hands (gated shell + file tools, issue 21) ---------------------------
+
+    def _call_shell(self, name: str, arguments: dict[str, Any]) -> ToolCallResult:
+        """One run_command/file_op call: policy tier → confirm gate → execute.
+
+        The tier comes from :mod:`jarvis.brain.shell_policy` and ONLY from it
+        — the model's arguments carry no channel that can weaken it, and a
+        hard-deny returns refusal text without ever consulting the confirmer.
+        """
+        detail = _args_detail(arguments)
+        self._publish(StepStarted(name=name, detail=detail))
+        decision = self._shell_decision(name, arguments)
+
+        if decision.tier == shell_policy.DENY:
+            self._audit_shell(name, arguments, decision, ok=False, error=decision.reason)
+            self._publish(StepFailed(name=name, detail=detail, error=decision.reason))
+            return ToolCallResult(
+                text=decision.refusal or "I won't do that.",
+                is_error=True,
+                denied=True,
+                error=decision.reason,
+            )
+
+        if decision.tier == shell_policy.CONFIRM and not self._confirm(
+            decision.preview
+        ):
+            self._audit_shell(
+                name, arguments, decision, ok=False, error="confirmation_declined",
+                confirmed=False,
+            )
+            self._publish(
+                StepFailed(name=name, detail=detail, error="confirmation_declined")
+            )
+            return ToolCallResult(
+                text=CANCELLED_REPLY, is_error=True, error="confirmation_declined"
+            )
+        confirmed = True if decision.tier == shell_policy.CONFIRM else None
+
+        hands = self.hands
+        if hands is None:
+            self._audit_shell(
+                name, arguments, decision, ok=False, error="unavailable",
+                confirmed=confirmed,
+            )
+            self._publish(StepFailed(name=name, detail=detail, error="unavailable"))
+            return ToolCallResult(
+                text=f"The {name} tool isn't available right now.",
+                is_error=True,
+                error="unavailable",
+            )
+
+        try:
+            result = self._run_hands(hands, name, arguments)
+        except Exception as exc:  # noqa: BLE001 — boundary: speak plain, never crash
+            err = type(exc).__name__
+            self._audit_shell(
+                name, arguments, decision, ok=False, error=err, confirmed=confirmed
+            )
+            self._publish(StepFailed(name=name, detail=detail, error=err))
+            return ToolCallResult(
+                text=plain_error_reply(err, fallback="Something went wrong."),
+                is_error=True,
+                error=err,
+            )
+
+        reply = (getattr(result, "reply", "") or "").strip()
+        ok = bool(getattr(result, "ok", True))
+        err = getattr(result, "error", None)
+        self._audit_shell(
+            name, arguments, decision, ok=ok, error=err, confirmed=confirmed
+        )
+        if ok:
+            # Detail stays the compact preview line — the overlay does not
+            # need the output dump (same discipline as the observe tools).
+            self._publish(StepFinished(name=name, detail=decision.preview or detail))
+            return ToolCallResult(text=reply or "Done.", is_error=False)
+        self._publish(
+            StepFailed(name=name, detail=detail, error=str(err or "failed"))
+        )
+        return ToolCallResult(
+            text=reply or plain_error_reply(
+                str(err) if err else None, fallback="Something went wrong."
+            ),
+            is_error=True,
+            error=err,
+        )
+
+    def _shell_decision(self, name: str, arguments: dict[str, Any]) -> Any:
+        """Compute the policy tier for one call (jail roots from the hands)."""
+        roots = tuple(getattr(self.hands, "roots", ()) or ())
+        if name == "run_command":
+            command = str(arguments.get("command") or "").strip()
+            cwd = _opt_str(arguments, "cwd") or (
+                str(getattr(self.hands, "cwd", "") or "") or None
+            )
+            return shell_policy.classify_command(
+                command,
+                approved_roots=roots,
+                cwd=Path(cwd) if cwd else None,
+            )
+        return shell_policy.classify_file_op(
+            str(arguments.get("op") or ""),
+            str(arguments.get("src") or ""),
+            _opt_str(arguments, "dst"),
+            approved_roots=roots,
+        )
+
+    @staticmethod
+    def _run_hands(hands: Any, name: str, arguments: dict[str, Any]) -> Any:
+        if name == "run_command":
+            return hands.run_command(
+                str(arguments.get("command") or "").strip(),
+                cwd=_opt_str(arguments, "cwd"),
+                timeout_s=_opt_int(arguments, "timeout_s"),
+            )
+        return hands.file_op(
+            str(arguments.get("op") or ""),
+            str(arguments.get("src") or ""),
+            _opt_str(arguments, "dst"),
+        )
+
+    def _audit_shell(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        decision: Any,
+        *,
+        ok: bool,
+        error: Any = None,
+        confirmed: bool | None = None,
+    ) -> None:
+        # Every call — allowed, confirmed, declined, denied — leaves a record
+        # (same bus-riding pattern as the observe audit, issue 19).
+        self._publish(
+            AuditRecord(
+                name="shell",
+                details={
+                    "tool": name,
+                    "args": dict(arguments),
+                    "tier": decision.tier,
+                    "preview": decision.preview,
+                    "confirmed": confirmed,
+                    "ok": ok,
+                    "error": str(error) if error else None,
+                },
+            )
+        )
+
     # -- confirm gate -------------------------------------------------------
 
     @staticmethod
@@ -619,7 +859,10 @@ class JarvisToolBridge:
                         "observe_windows / observe_processes / observe_files / "
                         "observe_music senses. Prefer them over shell for those "
                         "domains; observe current state first when a request "
-                        "refers to it. google_read is read-only."
+                        "refers to it. google_read is read-only. For dev/git/"
+                        "file work use run_command and file_op — JARVIS gates "
+                        "the risk itself (read-only runs at once, anything "
+                        "else asks the user, dangerous commands are refused)."
                     ),
                 },
             )
@@ -804,6 +1047,7 @@ class _MCPRequestHandler(BaseHTTPRequestHandler):
 __all__ = [
     "JarvisToolBridge",
     "OBSERVE_TOOL_NAMES",
+    "SHELL_TOOL_NAMES",
     "ToolCallResult",
     "TOOL_NAMES",
     "allowed_tool_ids",

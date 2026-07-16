@@ -82,11 +82,14 @@ def test_build_args_registers_mcp_tool_bridge() -> None:
         assert server["url"].startswith("http://127.0.0.1:")
         assert server["url"].endswith("/mcp")
 
-        # All six JARVIS tools are allow-listed alongside the safe shell tools.
+        # All bridge tools are allow-listed alongside the safe read tools.
         tools = args[args.index("--allowedTools") + 1]
         for tool_id in allowed_tool_ids():
             assert tool_id in tools
-        assert "Bash" in tools  # existing safe tools still present
+        assert "Read" in tools  # safe read tools still present
+        # The CLI's own Bash stays OFF (issue 21): raw shell would bypass the
+        # confirm gate — shell goes through the bridge's run_command tool.
+        assert "Bash" not in tools.split(",")
 
         # The brain is told to prefer the JARVIS tools over shell.
         prompt = args[args.index("--append-system-prompt") + 1]

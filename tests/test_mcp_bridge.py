@@ -16,6 +16,7 @@ from jarvis.brain.mcp_bridge import (
     CANCELLED_REPLY,
     OBSERVE_TOOL_NAMES,
     SECRET_REFUSAL,
+    SHELL_TOOL_NAMES,
     TOOL_NAMES,
     JarvisToolBridge,
     allowed_tool_ids,
@@ -91,6 +92,8 @@ def test_tool_definitions_expose_the_domains() -> None:
         "observe_processes",
         "observe_files",
         "observe_music",
+        "run_command",
+        "file_op",
     }
     for d in defs:
         schema = d["inputSchema"]
@@ -100,6 +103,10 @@ def test_tool_definitions_expose_the_domains() -> None:
             # Perception tools (issue 19) take structured args, not the
             # plain-English command envelope.
             assert "command" not in schema["properties"]
+            assert schema["additionalProperties"] is False
+        elif d["name"] in SHELL_TOOL_NAMES:
+            # Gated hands (issue 21): structured args too, closed schemas —
+            # no side channel through which the model could self-classify.
             assert schema["additionalProperties"] is False
         else:
             assert "command" in schema["properties"]
